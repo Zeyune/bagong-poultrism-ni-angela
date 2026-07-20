@@ -1,0 +1,52 @@
+{
+  "$comment": [
+    "RATCHET — IDs not yet covered by a test, with the reason and the step that will cover them.",
+    "",
+    "CI fails if a NON-exempt ID has no test (you removed coverage or added a rule without one).",
+    "CI ALSO fails if an EXEMPT ID has a test (you covered it — delete the line).",
+    "",
+    "This list may only ever SHRINK. Adding an entry to silence a failure is the one",
+    "move it exists to prevent: it is visible in review, and it needs a reason written",
+    "next to it. See docs/TESTING.md §3.",
+    "",
+    "Steps 0-1 are complete, so nothing they cover is exempt: G-65, BR-10, BR-11, I-15",
+    "are all verified by scripts/verify-step1.mjs and the CI gates."
+  ],
+
+  "invariants": {
+    "I-01": "mortality decrements currentCount — Step 6",
+    "I-02": "currentCount never negative — Step 6",
+    "I-03": "feed consumption emits one OUT txn — Step 7 (P1 automation)",
+    "I-04": "edit reverses and re-posts — Step 6",
+    "I-05": "currentStock equals ledger sum — Step 7",
+    "I-06": "consumption may go negative, sales may not — Step 7",
+    "I-07": "weighted average recompute + snapshot — Step 7",
+    "I-08": "treatment raises Flock.withdrawalUntil — P1 (FR-04/FR-12)",
+    "I-09": "fulfilment blocked during withdrawal — P1 (FR-12)",
+    "I-10": "stock deducts exactly once on fulfil — P2 (FR-09)",
+    "I-11": "sellable eggs post as IN/PRODUCTION — Step 6",
+    "I-12": "egg count relationships — Step 6",
+    "I-13": "logDate bounds — Step 6",
+    "I-14": "flock with logs cannot be deleted — Step 5"
+  },
+
+  "requirements": {
+    "FR-01": "flock CRUD — Step 5",
+    "FR-02": "daily logs — Step 6",
+    "FR-03": "weight sampling — Step 6",
+    "FR-04": "health and treatment — P1, not in this phase",
+    "FR-05": "inventory — Step 7",
+    "FR-06": "dashboard — Step 8",
+    "FR-07": "reporting — P1, not in this phase",
+    "FR-08": "alerts — P1, not in this phase",
+    "FR-09": "sales — P2, not in this phase",
+    "FR-11": "processing — P1, not in this phase",
+    "FR-12": "withdrawal enforcement — P1, not in this phase",
+    "FR-13": "audit trail — Step 4"
+  },
+
+  "security": {
+    "$comment": "Deliberately empty. Security checks are never exempt — they are the gates that hold the rest up.",
+    "$note": "G-65, G-72, G-80 are enforced by check-rls, check-secrets, check-no-advisory-locks."
+  }
+}

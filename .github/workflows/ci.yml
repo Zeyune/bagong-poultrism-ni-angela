@@ -1,0 +1,154 @@
+# Continuous integration.
+#
+# The two security gates (test:rls, test:secrets) run BEFORE anything expensive.
+# G-65 reopens silently every time a migration adds a table (G-71), so it must be
+# enforced by machinery rather than memory — and there is no point spending four
+# minutes on a build if the database is world-readable.
+#
+# See docs/TESTING.md §5.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Local Supabase publishes fixed dev credentials, identical on every machine.
+  # These grant nothing — the stack is ephemeral and holds no real data.
+  DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+  DIRECT_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+  NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+
+jobs:
+  # ── Cheap checks that need no database ──────────────────────────────────
+  static:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # G-80 / I-15. Advisory locks work perfectly against a direct connection
+      # and fail SILENTLY through Supabase's transaction-mode pooler. No test on
+      # a developer machine can catch this, because local Supabase runs no pooler.
+      - name: No advisory locks
+        run: npm run test:no-advisory-locks
+
+      - name: Coverage map (ratchet)
+        run: npm run test:coverage-map
+
+  # ── Gates and tests that need a real database ───────────────────────────
+  database:
+    name: Database, security gates, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start Supabase
+        run: supabase start -x realtime,storage-api,imgproxy,studio,edge-runtime,logflare,vector
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      # Must run after EVERY migration — Prisma does not manage RLS, so any new
+      # table arrives with it disabled (G-71).
+      - name: Apply RLS lockdown, triggers, seed
+        run: npm run db:sql
+
+      # ── The gate that matters most ────────────────────────────────────────
+      - name: 🔒 RLS lockdown (G-65)
+        run: npm run test:rls
+
+      - name: 🔒 Anon key cannot read data (G-65, end-to-end)
+        run: |
+          set -euo pipefail
+          ANON=$(supabase status --output json | jq -r '.ANON_KEY')
+          for table in Farm InventoryItem Customer SalesOrder AuditLog; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "apikey: ${ANON}" -H "Authorization: Bearer ${ANON}" \
+              "http://127.0.0.1:54321/rest/v1/${table}?select=*")
+            if [ "$code" = "200" ]; then
+              echo "::error::${table} is READABLE with the public anon key — G-65 is open."
+              exit 1
+            fi
+            echo "  ${table}: HTTP ${code} ✓"
+          done
+
+      - name: Schema and migrations agree
+        run: |
+          npx prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --shadow-database-url "$DIRECT_URL" \
+            --exit-code && echo "in sync" || {
+              echo "::error::schema.prisma has drifted from prisma/migrations. Run prisma migrate dev."
+              exit 1
+            }
+
+      - name: Step 1 verification
+        run: node scripts/verify-step1.mjs
+
+      - name: Unit and integration tests
+        run: npm test
+
+  # ── Build, then assert no secret reached the bundle ─────────────────────
+  build:
+    name: Build and secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+
+      - name: Build
+        run: npm run build
+        env:
+          # Deliberately fake, and deliberately long enough to be detectable:
+          # the scan looks for these literal values in the client bundle. If one
+          # appears, a real key would have too.
+          SUPABASE_SERVICE_ROLE_KEY: ci-canary-service-role-key-do-not-use
+          SUPABASE_JWT_SECRET: ci-canary-jwt-secret-do-not-use-000000
+          SENDGRID_API_KEY: ci-canary-sendgrid-key-do-not-use
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-anon-key-public-by-design
+
+      # G-72. The service-role key bypasses RLS entirely — leaking it into the
+      # bundle would undo the G-65 lockdown invisibly, with the app still working.
+      - name: 🔒 No server secret in the client bundle (G-72)
+        run: npm run test:secrets
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ci-canary-service-role-key-do-not-use
+          SUPABASE_JWT_SECRET: ci-canary-jwt-secret-do-not-use-000000
+          SENDGRID_API_KEY: ci-canary-sendgrid-key-do-not-use

@@ -1,0 +1,55 @@
+{
+  "name": "poultrypilot",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+
+    "db:migrate": "prisma migrate dev",
+    "db:generate": "prisma generate",
+    "db:sql": "node scripts/apply-sql.mjs",
+    "db:reset": "prisma migrate reset --force && npm run db:sql",
+    "db:studio": "prisma studio",
+
+    "supabase:start": "supabase start",
+    "supabase:stop": "supabase stop",
+
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "test:rls": "node scripts/check-rls.mjs",
+    "test:secrets": "node scripts/check-secrets.mjs",
+    "test:coverage-map": "node scripts/check-coverage-map.mjs",
+    "test:no-advisory-locks": "node scripts/check-no-advisory-locks.mjs",
+    "test:gates": "npm run test:rls && npm run test:secrets && npm run test:coverage-map && npm run test:no-advisory-locks",
+    "verify:step1": "node scripts/verify-step1.mjs",
+    "test:ci": "npm run typecheck && npm run lint && npm run test && npm run test:gates"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "@supabase/ssr": "^0.12.3",
+    "@supabase/supabase-js": "^2.110.7",
+    "dotenv": "^17.4.2",
+    "next": "16.2.10",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.10",
+    "prisma": "^7.8.0",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^4.1.10"
+  }
+}

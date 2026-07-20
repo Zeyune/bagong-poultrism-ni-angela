@@ -1,0 +1,645 @@
+// PoultryPilot — schema revision 2
+// See DATABASE.md for conventions, invariants, and the v1 → v2 changelog.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Prisma 7: connection URLs live in prisma.config.ts, not here.
+// Runtime uses the pooler via the driver adapter in src/lib/db.ts.
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum UserRole {
+  ADMIN
+  FARM_WORKER
+}
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  DEACTIVATED
+}
+
+enum FlockType {
+  LAYER
+  BROILER
+}
+
+enum FlockStatus {
+  ACTIVE
+  INACTIVE
+  PROCESSED
+  ARCHIVED
+}
+
+enum BirdStatus {
+  ACTIVE
+  CULLED
+  SOLD
+  DECEASED
+}
+
+enum InventoryItemType {
+  FEED
+  MEDICATION
+  SUPPLEMENT
+  PRODUCT
+}
+
+enum TransactionType {
+  IN
+  OUT
+}
+
+enum TransactionReason {
+  PURCHASE
+  PRODUCTION
+  MANUAL_ADJUSTMENT
+  FEED_CONSUMPTION
+  TREATMENT
+  SALE
+  SPOILAGE
+  REVERSAL
+}
+
+enum HealthSeverity {
+  MILD
+  MODERATE
+  SEVERE
+}
+
+enum HealthLogStatus {
+  OPEN
+  RESOLVED
+}
+
+enum SalesOrderStatus {
+  DRAFT
+  PLACED
+  FULFILLED
+  CANCELLED
+}
+
+enum AlertType {
+  PRODUCTION_DROP
+  MORTALITY_SPIKE
+  LOW_INVENTORY
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  SUPPRESSED
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+}
+
+// ───────────────────────────── Identity ─────────────────────────────
+
+model User {
+  id          String     @id @default(uuid()) @db.Uuid
+  authUserId  String     @unique @db.Uuid // → auth.users.id (Supabase)
+  email       String     @unique
+  name        String
+  role        UserRole   @default(FARM_WORKER)
+  status      UserStatus @default(INVITED)
+
+  farmId String
+  farm   Farm   @relation("FarmMembers", fields: [farmId], references: [id], onDelete: Restrict)
+
+  ownedFarm Farm? @relation("FarmOwner")
+
+  invitedAt   DateTime?
+  lastLoginAt DateTime?
+
+  // Attribution back-relations
+  dailyLogs        DailyLog[]             @relation("DailyLogAuthor")
+  weightRecords    WeightRecord[]         @relation("WeightRecordAuthor")
+  healthLogs       HealthLog[]            @relation("HealthLogAuthor")
+  treatments       Treatment[]            @relation("TreatmentAuthor")
+  invTransactions  InventoryTransaction[] @relation("InvTxnAuthor")
+  processingEvents ProcessingEvent[]      @relation("ProcessingAuthor")
+  salesOrders      SalesOrder[]           @relation("SalesOrderAuthor")
+  auditLogs        AuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([farmId, status])
+}
+
+model Farm {
+  id       String @id @default(cuid())
+  name     String
+  location String
+  timezone String @default("UTC") // IANA name; authority for all day boundaries
+  currency String @default("USD") // ISO 4217
+
+  // Nullable to break the bootstrap cycle: Farm is inserted first, then backfilled.
+  ownerId String? @unique @db.Uuid
+  owner   User?   @relation("FarmOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  users          User[]          @relation("FarmMembers")
+  flocks         Flock[]
+  inventoryItems InventoryItem[]
+  customers      Customer[]
+  salesOrders    SalesOrder[]
+  alertSettings  AlertSetting[]
+  alertEvents    AlertEvent[]
+  growthCurves   GrowthCurve[]
+  auditLogs      AuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ───────────────────────────── Flocks ─────────────────────────────
+
+model Flock {
+  id     String @id @default(cuid())
+  farmId String
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Restrict)
+
+  type            FlockType
+  name            String
+  breed           String?
+  initialCount    Int
+  currentCount    Int
+  startDate       DateTime    @db.Date
+  cycleLengthDays Int? // 45 for broilers; null for layers
+  status          FlockStatus @default(ACTIVE)
+
+  // Which feed this flock consumes — resolves "deduct from the corresponding feed item"
+  defaultFeedItemId String?
+  defaultFeedItem   InventoryItem? @relation(fields: [defaultFeedItemId], references: [id], onDelete: SetNull)
+
+  growthCurveId String?
+  growthCurve   GrowthCurve? @relation(fields: [growthCurveId], references: [id], onDelete: SetNull)
+
+  // Denormalized max(Treatment.withdrawalUntil); blocks sales while in the future
+  withdrawalUntil DateTime?
+
+  birds           Bird[]
+  dailyLogs       DailyLog[]
+  weightRecords   WeightRecord[]
+  healthLogs      HealthLog[]
+  processingEvent ProcessingEvent?
+  salesOrderItems SalesOrderItem[]
+  alertSettings   AlertSetting[]
+  alertEvents     AlertEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([farmId, name])
+  @@index([farmId, status])
+}
+
+model Bird {
+  id      String @id @default(cuid())
+  flockId String
+  flock   Flock  @relation(fields: [flockId], references: [id], onDelete: Cascade)
+
+  tag       String
+  status    BirdStatus @default(ACTIVE)
+  hatchDate DateTime?  @db.Date
+  notes     String?
+
+  healthLogs HealthLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([flockId, tag]) // unique within the flock, not globally
+  @@index([flockId, status])
+}
+
+// ───────────────────────────── Daily operations ─────────────────────────────
+
+model DailyLog {
+  id      String @id @default(cuid())
+  flockId String
+  flock   Flock  @relation(fields: [flockId], references: [id], onDelete: Restrict)
+
+  logDate DateTime @db.Date
+
+  feedItemId String?
+  feedItem   InventoryItem? @relation(fields: [feedItemId], references: [id], onDelete: SetNull)
+
+  feedConsumedKg Decimal @db.Decimal(12, 3)
+  waterConsumedL Decimal @db.Decimal(12, 3)
+  mortalityCount Int     @default(0)
+
+  eggsCollected Int? // LAYER only
+  crackedEggs   Int? // LAYER only
+  eggsDiscarded Int? // LAYER only — destroyed under medication withdrawal
+
+  notes String?
+
+  createdById String @db.Uuid
+  createdBy   User   @relation("DailyLogAuthor", fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([flockId, logDate])
+  @@index([flockId, logDate(sort: Desc)])
+}
+
+model WeightRecord {
+  id      String @id @default(cuid())
+  flockId String
+  flock   Flock  @relation(fields: [flockId], references: [id], onDelete: Restrict)
+
+  recordDate DateTime @db.Date
+  avgWeightG Decimal  @db.Decimal(12, 2)
+  sampleSize Int
+
+  createdById String @db.Uuid
+  createdBy   User   @relation("WeightRecordAuthor", fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([flockId, recordDate])
+  @@index([flockId, recordDate(sort: Desc)])
+}
+
+// ───────────────────────────── Health ─────────────────────────────
+
+model HealthLog {
+  id      String @id @default(cuid())
+  flockId String
+  flock   Flock  @relation(fields: [flockId], references: [id], onDelete: Restrict)
+
+  birdId String?
+  bird   Bird?   @relation(fields: [birdId], references: [id], onDelete: SetNull)
+
+  logDate     DateTime
+  eventType   String
+  severity    HealthSeverity  @default(MILD)
+  status      HealthLogStatus @default(OPEN)
+  resolvedAt  DateTime?
+  description String?
+
+  createdById String @db.Uuid
+  createdBy   User   @relation("HealthLogAuthor", fields: [createdById], references: [id], onDelete: Restrict)
+
+  treatments Treatment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([flockId, status])
+  @@index([flockId, logDate(sort: Desc)])
+}
+
+model Treatment {
+  id          String    @id @default(cuid())
+  healthLogId String
+  healthLog   HealthLog @relation(fields: [healthLogId], references: [id], onDelete: Cascade)
+
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+
+  medicationName String // denormalized snapshot
+  dosageText     String // as administered, e.g. "10ml/L drinking water"
+  quantityUsed   Decimal @db.Decimal(12, 3) // the amount actually deducted from stock
+  unit           String
+  route          String?
+
+  startDate            DateTime
+  endDate              DateTime
+  withdrawalPeriodDays Int
+  withdrawalUntil      DateTime // endDate + withdrawalPeriodDays; drives the sales block
+
+  createdById String @db.Uuid
+  createdBy   User   @relation("TreatmentAuthor", fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([inventoryItemId])
+  @@index([withdrawalUntil])
+}
+
+// ───────────────────────────── Inventory ─────────────────────────────
+
+model InventoryItem {
+  id     String @id @default(cuid())
+  farmId String
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Restrict)
+
+  name String
+  type InventoryItemType
+  unit String // stock-keeping unit: "kg", "L", "ml", "egg", "bird"
+
+  unitsPerPackage Int? // sale packaging divisor; eggs = 12
+
+  currentStock     Decimal  @db.Decimal(12, 3)
+  avgUnitCost      Decimal  @default(0) @db.Decimal(12, 4) // weighted average
+  salePrice        Decimal? @db.Decimal(12, 2) // per package, PRODUCT items only
+  reorderThreshold Decimal  @db.Decimal(12, 3)
+  isActive         Boolean  @default(true)
+
+  transactions     InventoryTransaction[]
+  treatments       Treatment[]
+  salesOrderItems  SalesOrderItem[]
+  dailyLogs        DailyLog[]
+  flocksAsFeed     Flock[]
+  processingEvents ProcessingEvent[]
+  alertEvents      AlertEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([farmId, name])
+  @@index([farmId, type])
+}
+
+model InventoryTransaction {
+  id              String        @id @default(cuid())
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+
+  transactionType TransactionType
+  reason          TransactionReason
+  quantity        Decimal           @db.Decimal(12, 3) // always positive
+  unitCostAtTime  Decimal?          @db.Decimal(12, 4) // snapshot — historical reports stay stable
+  costAmount      Decimal?          @db.Decimal(12, 2) // quantity × unitCostAtTime
+  transactionDate DateTime
+
+  relatedEntityId   String? // DailyLog.id | Treatment.id | SalesOrderItem.id | ProcessingEvent.id
+  relatedEntityType String?
+
+  // Compensating entries: edits and deletes reverse, never mutate.
+  reversalOfId String?               @unique
+  reversalOf   InventoryTransaction? @relation("TxnReversal", fields: [reversalOfId], references: [id], onDelete: SetNull)
+  reversedBy   InventoryTransaction? @relation("TxnReversal")
+
+  notes String?
+
+  createdById String @db.Uuid
+  createdBy   User   @relation("InvTxnAuthor", fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  @@index([inventoryItemId, transactionDate(sort: Desc)])
+  @@index([relatedEntityType, relatedEntityId])
+}
+
+model ProcessingEvent {
+  id      String @id @default(cuid())
+  flockId String @unique
+  flock   Flock  @relation(fields: [flockId], references: [id], onDelete: Restrict)
+
+  processedAt          DateTime
+  birdsProcessed       Int
+  totalLiveWeightKg    Decimal  @db.Decimal(12, 3)
+  totalDressedWeightKg Decimal? @db.Decimal(12, 3)
+
+  producedItemId String
+  producedItem   InventoryItem @relation(fields: [producedItemId], references: [id], onDelete: Restrict)
+  unitsProduced  Decimal       @db.Decimal(12, 3)
+
+  notes String?
+
+  createdById String @db.Uuid
+  createdBy   User   @relation("ProcessingAuthor", fields: [createdById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ───────────────────────────── Sales ─────────────────────────────
+
+model Customer {
+  id     String @id @default(cuid())
+  farmId String
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Restrict)
+
+  name         String
+  contactEmail String?
+  contactPhone String?
+  address      String?
+  notes        String?
+  isActive     Boolean @default(true)
+
+  salesOrders SalesOrder[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([farmId, name])
+}
+
+model SalesOrder {
+  id     String @id @default(cuid())
+  farmId String
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Restrict)
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  orderNumber String
+  orderDate   DateTime
+  status      SalesOrderStatus @default(DRAFT)
+
+  subtotal    Decimal @db.Decimal(12, 2)
+  taxAmount   Decimal @default(0) @db.Decimal(12, 2)
+  totalAmount Decimal @db.Decimal(12, 2)
+  currency    String
+
+  fulfilledAt DateTime? // stock deducts here, exactly once
+  cancelledAt DateTime?
+  notes       String?
+
+  createdById String @db.Uuid
+  createdBy   User   @relation("SalesOrderAuthor", fields: [createdById], references: [id], onDelete: Restrict)
+
+  items   SalesOrderItem[]
+  invoice Invoice?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([farmId, orderNumber])
+  @@index([farmId, status])
+  @@index([customerId, orderDate(sort: Desc)])
+}
+
+model SalesOrderItem {
+  id           String     @id @default(cuid())
+  salesOrderId String
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+
+  // Traceability + the withdrawal-period check
+  sourceFlockId String?
+  sourceFlock   Flock?  @relation(fields: [sourceFlockId], references: [id], onDelete: SetNull)
+
+  productName String // denormalized snapshot
+  quantity    Decimal @db.Decimal(12, 3) // in packages
+  unitPrice   Decimal @db.Decimal(12, 2)
+  subtotal    Decimal @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([salesOrderId])
+}
+
+model Invoice {
+  id           String     @id @default(cuid())
+  salesOrderId String     @unique
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+
+  invoiceNumber String   @unique
+  issuedAt      DateTime
+  currency      String
+  totalAmount   Decimal  @db.Decimal(12, 2)
+  pdfUrl        String?
+
+  createdAt DateTime @default(now())
+}
+
+// ───────────────────────────── Alerts ─────────────────────────────
+
+model AlertSetting {
+  id     String @id @default(cuid())
+  farmId String
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  // null = farm-wide default; set = per-flock override
+  flockId String?
+  flock   Flock?  @relation(fields: [flockId], references: [id], onDelete: Cascade)
+
+  alertType      AlertType
+  thresholdValue Decimal   @db.Decimal(12, 3)
+  cooldownHours  Int       @default(24)
+  isActive       Boolean   @default(true)
+
+  recipients AlertRecipient[]
+  events     AlertEvent[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // NOTE: Postgres treats NULLs as distinct in unique indexes, so this does not
+  // prevent duplicate farm-wide rows. Replace with a raw migration using
+  // `UNIQUE NULLS NOT DISTINCT` (Postgres 15+). See GAPS.md G-12.
+  @@unique([farmId, flockId, alertType])
+}
+
+model AlertRecipient {
+  id             String       @id @default(cuid())
+  alertSettingId String
+  alertSetting   AlertSetting @relation(fields: [alertSettingId], references: [id], onDelete: Cascade)
+
+  email String
+
+  createdAt DateTime @default(now())
+
+  @@unique([alertSettingId, email])
+}
+
+model AlertEvent {
+  id     String @id @default(cuid())
+  farmId String
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  alertSettingId String?
+  alertSetting   AlertSetting? @relation(fields: [alertSettingId], references: [id], onDelete: SetNull)
+
+  alertType AlertType
+
+  flockId String?
+  flock   Flock?  @relation(fields: [flockId], references: [id], onDelete: SetNull)
+
+  inventoryItemId String?
+  inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id], onDelete: SetNull)
+
+  triggeredAt DateTime
+  message     String
+  payload     Json? // observed value, threshold, window
+
+  // "PRODUCTION_DROP:flock_x:2026-07-20" — the cooldown check reads this
+  dedupeKey String
+
+  notificationStatus NotificationStatus @default(PENDING)
+  sentAt             DateTime?
+  failureReason      String?
+
+  acknowledgedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@unique([dedupeKey])
+  @@index([farmId, triggeredAt(sort: Desc)])
+  @@index([notificationStatus])
+}
+
+// ───────────────────────────── Reference data ─────────────────────────────
+
+model GrowthCurve {
+  id     String @id @default(cuid())
+  farmId String
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  name        String // e.g. "Ross 308 — as-hatched"
+  breed       String
+  description String?
+
+  points GrowthCurvePoint[]
+  flocks Flock[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([farmId, name])
+}
+
+model GrowthCurvePoint {
+  id            String      @id @default(cuid())
+  growthCurveId String
+  growthCurve   GrowthCurve @relation(fields: [growthCurveId], references: [id], onDelete: Cascade)
+
+  dayOfCycle   Int
+  targetWeightG Decimal @db.Decimal(12, 2)
+
+  @@unique([growthCurveId, dayOfCycle])
+}
+
+// ───────────────────────────── Audit ─────────────────────────────
+
+model AuditLog {
+  id     String @id @default(cuid())
+  farmId String
+  farm   Farm   @relation(fields: [farmId], references: [id], onDelete: Cascade)
+
+  userId String? @db.Uuid
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  action     AuditAction
+  entityType String
+  entityId   String
+  before     Json?
+  after      Json?
+  ipAddress  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([farmId, createdAt(sort: Desc)])
+  @@index([entityType, entityId])
+}

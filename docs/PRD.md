@@ -24,6 +24,12 @@ The system provides a centralized dashboard for flock management, health monitor
 
 ## Functional Requirements
 
+> **Numbering is authoritative in [REQUIREMENTS.md](REQUIREMENTS.md)** and mirrored here. The two
+> diverged briefly on 2026-07-20 when FR-03 (Weight Sampling) was introduced and shifted the
+> sequence; this section is the reconciliation. Any future insertion appends a new highest number —
+> **existing FR numbers are never reused or renumbered**, because they are referenced from
+> `ROADMAP.md`, `TESTING.md`, test names, and commit messages.
+
 **User-Facing Requirements**
 
 *   **FR-01: Flock Creation & Management**
@@ -31,21 +37,27 @@ The system provides a centralized dashboard for flock management, health monitor
     *   Initial setup will be for one "Layer" flock (50 birds) and one "Broiler" flock (50 birds).
     *   Allow optional individual bird tagging (e.g., `HEN-012`) for specific health or performance tracking, while defaulting to flock-level data aggregation.
 
-*   **FR-02: Custom Daily Data Entry**
+*   **FR-02: Daily Data Entry**
     *   Provide a streamlined form for daily log entry per flock.
-    *   For Layer flocks: input for total eggs collected, cracked/unsellable eggs, feed consumed (kg), water consumed (L), and mortality count.
-    *   For Broiler flocks: input for feed consumed (kg), water consumed (L), mortality count, and a separate weekly input for average bird weight (g).
+    *   For Layer flocks: total eggs collected, cracked/unsellable eggs, eggs discarded under withdrawal, feed consumed (kg), water consumed (L), and mortality count.
+    *   For Broiler flocks: feed consumed (kg), water consumed (L), and mortality count.
+    *   One log per flock per calendar day, in farm-local time. Backfilling permitted; editing reverses and re-posts inventory movements.
 
-*   **FR-03: Health & Treatment Logging**
-    *   Users can log health events (e.g., "Coccidiosis observed", "Respiratory distress") and associate them with a flock or a specific tagged bird.
-    *   Log treatments administered, including medication name, dosage, and withdrawal period.
+*   **FR-03: Weight Sampling**
+    *   Record periodic (typically weekly) average bird weight for Broiler flocks, with the **sample size** — a 3-bird sample and a 50-bird sample are not equivalent evidence.
+    *   Separate from the daily log, which is why it is its own requirement.
 
-*   **FR-04: Inventory Management**
-    *   Track quantities of key inventory items: feed types, medications, supplements.
-    *   Daily feed consumption logs will automatically deduct from the corresponding feed inventory.
-    *   Treatment logs will automatically deduct from medication inventory.
+*   **FR-04: Health & Treatment Logging**
+    *   Users can log health events (e.g., "Coccidiosis observed", "Respiratory distress") and associate them with a flock or a specific tagged bird, with a severity and an open/resolved status.
+    *   Log treatments administered, selecting the medication from inventory and recording the quantity used, dosage, route, and withdrawal period.
 
-*   **FR-05: Data-Rich Dashboard**
+*   **FR-05: Inventory Management**
+    *   Track quantities of key inventory items: feed types, medications, supplements, and sellable products.
+    *   Daily feed consumption logs automatically deduct from the corresponding feed inventory item.
+    *   Treatment logs automatically deduct from medication inventory.
+    *   Append-only transaction ledger with weighted-average costing.
+
+*   **FR-06: Data-Rich Dashboard**
     *   The main dashboard will display critical, real-time metrics in a modern UI.
     *   Key widgets:
         *   Today's Egg Production vs. 7-Day Average
@@ -55,31 +67,46 @@ The system provides a centralized dashboard for flock management, health monitor
         *   Low Inventory warnings.
         *   Active health alerts.
 
-*   **FR-06: Custom Reporting**
+*   **FR-07: Custom Reporting**
     *   **Egg Production Report:** Chart daily/weekly/monthly egg production and hen-day percentage.
     *   **Broiler Growth Curve Report:** Plot the flock's average weight over time against a pre-defined target growth curve for the 45-day cycle.
     *   **Cost & Revenue Report:** Summarize total costs (from inventory usage) against total revenue (from sales) over a selected date range.
 
-*   **FR-07: Custom Alert System**
+*   **FR-08: Custom Alert System**
     *   The system will send email notifications based on user-configurable triggers.
     *   **Production Alert:** Trigger if egg production drops >15% compared to the 7-day average.
     *   **Mortality Alert:** Trigger if mortality in any flock exceeds 2 birds in a 24-hour period.
     *   **Inventory Alert:** Trigger when any inventory item falls below its defined reorder threshold.
 
-*   **FR-08: Integrated Sales Module**
+*   **FR-09: Integrated Sales Module**
     *   Users can create sales orders for products (e.g., "Dozen Eggs", "Whole Processed Chicken").
     *   A simple customer database to track customer names, contact info, and order history.
     *   Generate and download a simple PDF invoice from a completed sales order.
 
+*   **FR-11: Broiler Processing**
+    *   Record the end of a broiler cycle: date, birds processed, total live weight, dressed weight.
+    *   Convert the flock's birds into sellable product inventory, closing out the cycle and
+        finalising the flock's Feed Conversion Ratio.
+    *   Limited to Broiler flocks, once per flock.
+
+*   **FR-12: Medication Withdrawal Enforcement**
+    *   Compute a withdrawal clearance date from each treatment and apply it to the flock.
+    *   **Block fulfilment of any sale** of product sourced from a flock still under withdrawal.
+    *   Prompt for discarded eggs during withdrawal and exclude them from sellable stock.
+    *   Display an active withdrawal banner on the dashboard until the date clears.
+
+*   **FR-13: Audit Trail**
+    *   Record an immutable log of every create, update, and delete, with actor and a before/after
+        diff.
+    *   Readable by Admins only; never editable or deletable.
+
 **Admin-Facing Requirements**
 
-*   **FR-09: User Management**
-    *   Admin can invite new users via email to the "Farm Worker" role.
-    *   Admin can deactivate or delete user accounts.
-
-*   **FR-10: System Configuration**
-    *   Admin can define and edit alert thresholds (e.g., mortality count, production drop %).
-    *   Admin can add/edit inventory items and set their low-stock reorder levels.
+*   **FR-10: User & System Administration**
+    *   Admin can invite new users by email to the "Farm Worker" role, via Supabase Auth.
+    *   Admin can deactivate user accounts. Deactivation is a status change, never a delete — authored records must retain a valid author.
+    *   Admin can define and edit alert thresholds (mortality count, production drop %), scoped per flock or farm-wide.
+    *   Admin can add and edit inventory items and set their low-stock reorder levels.
 
 ## Non-Functional Requirements
 
@@ -99,12 +126,13 @@ The system provides a centralized dashboard for flock management, health monitor
 
 | Component | Technology | Rationale |
 |:---|:---|:---|
-| **Frontend** | React (Next.js) | Enables fast, server-rendered pages for a responsive feel. Component-based architecture is ideal for a data-rich dashboard. Strong ecosystem. |
-| **Backend** | Node.js (NestJS) | Provides a structured, scalable, and maintainable backend architecture. TypeScript ensures type safety and aligns with the frontend stack. |
-| **Database** | PostgreSQL | A robust, open-source relational database perfect for structured farm data, financial records, and ensuring data integrity. |
-| **Hosting** | Vercel & Render/Fly.io | Vercel offers seamless CI/CD for Next.js. Render/Fly.io provides cost-effective, scalable hosting for the backend and database with easy deployment. |
-| **Authentication** | Clerk | Offloads complex user management, authentication, and security, accelerating development and ensuring best practices are followed. |
-| **Notifications** | SendGrid | A reliable and scalable email API for delivering critical system alerts to users. |
+| **Frontend** | React (Next.js) | Fast, server-rendered pages; component architecture suits a data-rich dashboard; strong ecosystem. |
+| **Backend** | Next.js Route Handlers | Runs on the same Vercel deployment as the frontend — one deployable, one bill, shared TypeScript types. Replaces the originally specified NestJS, which expects a long-running server and fits Vercel's serverless model poorly. |
+| **Database** | PostgreSQL via Supabase | Managed Postgres with connection pooling, `pg_cron` for scheduled jobs, and Storage for invoice PDFs. Free tier is genuinely usable at this scale. |
+| **Hosting** | Vercel + Supabase | Serverless functions cold-start in ~100–300ms rather than the ~1 minute of spin-down container tiers, so a once-daily usage pattern stays responsive. No separate backend host. |
+| **Authentication** | Supabase Auth | Same platform as the database, so user provisioning is a Postgres trigger rather than a webhook — no signature verification, no delivery lag, no partially-provisioned state. Replaces the originally specified Clerk. |
+| **Scheduled jobs** | `pg_cron` (Supabase) | Runs the low-inventory sweep and nightly stock reconciliation. The original stack had no scheduler at all. |
+| **Notifications** | SendGrid | Email delivery for farm alerts only — **not** for user invitations, which Supabase Auth sends. |
 
 ## Success Metrics & KPIs
 
@@ -117,12 +145,13 @@ The system provides a centralized dashboard for flock management, health monitor
 
 ## Risk Analysis & Mitigation
 
-| Risk | Impact | Mitigation Strategy |
-|:---|:---|:---|
+| Risk | Description | Impact | Mitigation Strategy |
+|:---|:---|:---|:---|
 | **Poor Data Integrity** | Incorrect data entry leads to flawed reports and bad decisions. | High | Implement strict input validation, use clear UI labels, provide tooltips, and default to sensible values where possible. |
 | **Low User Adoption** | The system is perceived as too complex or time-consuming. | High | Prioritize UX/UI simplicity. Create a <5 minute onboarding flow. Ensure the mobile web experience is excellent for quick data entry in the field. |
 | **Scope Creep** | Adding un-planned features delays the core product launch. | Medium | Adhere strictly to this PRD for v1. Maintain a prioritized backlog for future features and get user validation before committing. |
-| **Vendor Lock-in** | Over-reliance on third-party services like Clerk or SendGrid. | Low | Use abstraction layers (e.g., an `AuthService` interface) in the codebase to decouple from the specific vendor API, simplifying future replacement if necessary. |
+| **Vendor Lock-in** | Heavy reliance on Supabase for database, auth, scheduling, and storage. | Medium | Raised from Low: consolidating on one vendor is what makes this stack cheap and simple, and also what makes leaving expensive. Keep business logic in application code rather than database functions where practical, use Prisma (portable to any Postgres), and confine Supabase-specific calls behind an `AuthService` interface. The database itself is standard Postgres and can be dumped and moved. |
+| **Free-tier limits** | Project pauses after 7 days idle; no automated backups. | Medium | Explicit decision to run on the free tier. Mitigate with a scheduled keep-alive ping and a scheduled `pg_dump` to versioned storage. Revisit before the farm depends on this as its record of truth. |
 
 ## Constraints & Assumptions
 

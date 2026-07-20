@@ -4,8 +4,13 @@
 > issues that drove these changes, and the [Changelog](#changelog-v1--v2) at the end of this file
 > for a summary of what moved.
 >
+> **Platform revision (2026-07-20):** the stack moved to **Vercel + Supabase**. Auth is Supabase
+> Auth, not Clerk; the backend is Next.js Route Handlers, not NestJS. See
+> [§ Supabase Integration](#supabase-integration) for connection pooling, the identity link, and the
+> user-provisioning trigger.
+>
 > Four design decisions are baked into this revision:
-> 1. **Auth is Clerk-only.** No local password column; `clerkUserId` is the identity link.
+> 1. **Auth is delegated, not local.** No password column; `authUserId` links to `auth.users`.
 > 2. **Production auto-posts to inventory.** Eggs and processed broilers become real `PRODUCT` stock.
 > 3. **Withdrawal periods are enforced,** not just recorded. Sales are blocked during withdrawal.
 > 4. **Costing is weighted-average,** snapshotted per transaction so historical reports are stable.
@@ -92,6 +97,194 @@ erDiagram
 
 ---
 
+## Supabase Integration
+
+### Connection strings
+
+Vercel runs the API as serverless functions, so every invocation is a potentially new database
+connection. Direct connections exhaust Postgres' connection limit quickly.
+
+```bash
+# Runtime — Supavisor transaction mode
+DATABASE_URL="postgresql://…@…pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
+# Migrations — direct connection
+DIRECT_URL="postgresql://…@…supabase.com:5432/postgres"
+```
+
+`pgbouncer=true` disables prepared statements, which transaction mode does not support.
+`connection_limit=1` is required in serverless: each function instance holds one connection rather
+than a pool it will never reuse.
+
+### Prisma 7 configuration
+
+**Connection URLs are no longer declared in `schema.prisma`.** Prisma 7 moved them to
+`prisma.config.ts`, and `PrismaClient` now requires a driver adapter:
+
+| File | Role | Which URL |
+|:---|:---|:---|
+| `prisma.config.ts` | Prisma CLI — migrations | `DIRECT_URL` (5432). Migrations need session state the pooler does not preserve. |
+| `src/lib/db.ts` | Runtime client, via `PrismaPg` adapter | `DATABASE_URL` (6543, pooled) |
+
+The split falls out naturally: the CLI gets the direct connection it needs, the serverless runtime
+gets the pooled one it needs.
+
+`@prisma/adapter-pg` uses `node-pg` instead of the Rust query engine, which removes the engine binary
+from the deployment bundle and **reduces cold start** — a direct improvement on G-75, which flagged
+Prisma's serverless cold-start cost as unmeasured.
+
+Prisma 7 also **no longer loads `.env` automatically**; `prisma.config.ts` imports `dotenv/config`.
+
+### What transaction mode costs — and what it does not
+
+This matters because the [Invariants](#invariants) below depend on transactional atomicity.
+
+| Mechanism | Survives transaction mode? |
+|:---|:---|
+| `SELECT … FOR UPDATE` row locks | ✅ Yes — transaction-scoped, released at commit |
+| Prisma `$transaction()` interactive callbacks | ✅ Yes — the pooler holds one backend for the transaction's life |
+| **Advisory locks** (`pg_advisory_lock`) | ❌ **No** — session-scoped, lost at the transaction boundary |
+| Prepared statements | ❌ No — disabled by `pgbouncer=true` |
+| `SET`, temp tables, session GUCs | ❌ No |
+
+**Consequence:** every invariant requiring a lock MUST use `SELECT … FOR UPDATE` inside a Prisma
+interactive transaction. Advisory locks MUST NOT be used — they will appear to work in local
+development against a direct connection and fail silently in production through the pooler.
+
+### User provisioning
+
+Supabase Auth writes to `auth.users`. A trigger projects that into `public.User` in the **same
+transaction** — there is no webhook, no signature verification, and no window where a user is
+authenticated but has no local row.
+
+```sql
+create or replace function public.handle_new_auth_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public."User" (id, "authUserId", email, name, role, status, "farmId", "createdAt", "updatedAt")
+  values (
+    gen_random_uuid()::text,
+    new.id,
+    new.email,
+    coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
+    coalesce((new.raw_user_meta_data->>'role')::"UserRole", 'FARM_WORKER'),
+    'ACTIVE',
+    (new.raw_user_meta_data->>'farmId'),
+    now(), now()
+  )
+  on conflict ("authUserId") do nothing;   -- idempotent
+  return new;
+end; $$;
+
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_auth_user();
+```
+
+`role` and `farmId` travel in the invitation's `raw_user_meta_data`, set when the Admin issues the
+invite. The `on conflict` clause makes re-running safe.
+
+> **Why this is better than the webhook it replaces.** The Clerk design required a signed HTTP
+> callback that could arrive late, out of order, or not at all — which forced a "Setting up your
+> account…" retry state into the sign-in flow *(USER_FLOWS §1.1)*. A trigger runs in the same
+> transaction as the auth insert. That state disappears entirely.
+
+### ⚠️ Row Level Security — required, not optional
+
+**Supabase exposes every table in the `public` schema through PostgREST at `/rest/v1/`, reachable
+with the `anon` key that ships in the browser bundle.** Tables created by Prisma have RLS
+**disabled** by default. Without the migration below, anyone who opens DevTools can read every
+customer record, every financial figure, and every log — and write to them — completely bypassing
+the RBAC specified in [BUSINESS_RULES §2.1](BUSINESS_RULES.md).
+
+This is not a theoretical risk. The `anon` key is *designed* to be public; RLS is the only thing
+standing behind it. The API-layer RBAC is a second door, not the only one.
+
+This project authorizes in application code, not in policies *(the RLS-as-primary option was
+considered and not taken)*. So the correct posture is: **enable RLS everywhere, write no policies,
+and let only the service-role key through.** Prisma connects as the database owner and bypasses RLS,
+so application queries are unaffected.
+
+```sql
+-- Deny-all baseline. RLS with zero policies = nothing passes except roles that
+-- bypass RLS (service_role, and the owner Prisma connects as).
+do $$
+declare t record;
+begin
+  for t in
+    select tablename from pg_tables where schemaname = 'public'
+  loop
+    execute format('alter table public.%I enable row level security', t.tablename);
+    execute format('alter table public.%I force row level security', t.tablename);
+  end loop;
+end $$;
+
+-- Belt and braces: revoke the Data API roles outright.
+revoke all on all tables    in schema public from anon, authenticated;
+revoke all on all sequences in schema public from anon, authenticated;
+revoke all on all functions in schema public from anon, authenticated;
+
+alter default privileges in schema public
+  revoke all on tables from anon, authenticated;
+```
+
+> **Run this immediately after every `prisma migrate` that creates a table.** Prisma does not manage
+> RLS and will not re-apply it. A new table ships with RLS off — see G-71.
+>
+> **The stronger alternative:** disable the Data API entirely (Dashboard → Settings → API → Data API
+> → set exposed schemas to none). If nothing but Prisma ever touches this database, that closes the
+> door rather than locking it. Recommended if you are confident you will not use Supabase client
+> libraries directly from the frontend.
+
+**Verify it worked** — this must return zero rows:
+
+```sql
+select tablename from pg_tables
+where schemaname = 'public' and rowsecurity = false;
+```
+
+And from a browser console against the live project, this must **not** return data:
+
+```js
+const { data, error } = await supabase.from('Customer').select('*')
+// expect: error, or an empty array — never customer records
+```
+
+Storage buckets need the same treatment: invoice PDFs are financial documents, and a public bucket
+is a public URL.
+
+### Scheduled jobs
+
+Supabase includes `pg_cron`, which supplies the scheduler the previous stack lacked *(G-24)*:
+
+```sql
+-- ⚠️ pg_cron schedules in UTC, NOT in Farm.timezone. Every other time boundary in
+--    this system is farm-local (BR-05); these are the exception. Convert manually.
+--    Asia/Manila is UTC+8, so 06:00 local = 22:00 UTC the previous day.
+
+select cron.schedule('low-inventory-sweep', '0 22 * * *',      -- 06:00 Asia/Manila
+  $$ select public.evaluate_low_inventory_alerts() $$);
+
+select cron.schedule('stock-reconciliation', '30 18 * * *',    -- 02:30 Asia/Manila
+  $$ select public.reconcile_inventory_stock() $$);            -- asserts I-05
+```
+
+> **If `Farm.timezone` ever changes, these schedules do not follow it.** They are the one place in
+> the system where a time is hardcoded rather than derived — see G-69. A comment naming the intended
+> local time is mandatory on every job.
+
+### Free-tier constraints
+
+The project runs on Supabase's free tier by explicit decision. Two consequences are recorded here
+because they affect operations, not code:
+
+| Constraint | Effect | Mitigation |
+|:---|:---|:---|
+| **Pauses after 7 days without an API request** | Project suspends; needs manual resume. Daily farm use prevents it, but a quiet week between broiler cycles does not. | A scheduled keep-alive ping (see [CHANGELOG](../CHANGELOG.md)) |
+| **No automated backups** | A year of production and financial records has no recovery path *(G-59)* | Scheduled `pg_dump` to versioned storage |
+| 500 MB database | Ample — this schema at full scale is a few MB | — |
+
+---
+
 ## Bootstrap Order
 
 The original schema had a circular required foreign key — `User.farmId` and `Farm.ownerId` each
@@ -100,13 +293,13 @@ resolves the cycle. First-run sequence:
 
 ```
 1. INSERT Farm        (ownerId = NULL, timezone, currency)
-2. INSERT User        (farmId = <farm>, role = ADMIN, clerkUserId from Clerk webhook)
-3. UPDATE Farm        SET ownerId = <user>
+2. Sign up first user (Supabase Auth → trigger inserts public.User with farmId in metadata)
+3. UPDATE Farm        SET ownerId = <user>, User.role = ADMIN
 ```
 
-Steps 1–3 run inside a single transaction in the seed script and in the Clerk `user.created`
-webhook handler for the very first user. `Farm.ownerId` is nullable in the schema but is treated as
-required by application logic once bootstrap completes.
+The seed script creates the farm, then invites the first user with `farmId` and `role: ADMIN` in
+their metadata so the trigger wires them up on signup. `Farm.ownerId` is nullable in the schema but
+is treated as required by application logic once bootstrap completes.
 
 ---
 
@@ -114,22 +307,24 @@ required by application logic once bootstrap completes.
 
 ### User
 
-Identity is owned by Clerk. This table stores the farm-local projection: role, status, and farm
-membership. It is kept in sync by the `POST /api/webhooks/clerk` handler.
+Identity is owned by **Supabase Auth** (`auth.users`). This table stores the farm-local projection:
+role, status, and farm membership. It is kept in sync by a **Postgres trigger**, not a webhook —
+see [§ Supabase Integration](#supabase-integration).
 
 | Column | Type | Notes |
 |:---|:---|:---|
 | `id` | String | PK. |
-| `clerkUserId` | String | **Unique.** The link to Clerk. Set on `user.created` webhook. |
-| `email` | String | Unique. Mirrored from Clerk for display and alert routing. |
-| `name` | String | Mirrored from Clerk. |
+| `authUserId` | String (uuid) | **Unique.** The link to `auth.users.id`. Set by the provisioning trigger. |
+| `email` | String | Unique. Mirrored from `auth.users` for display and alert routing. |
+| `name` | String | Mirrored from `auth.users.raw_user_meta_data`. |
 | `role` | Enum | `ADMIN` \| `FARM_WORKER`. |
 | `status` | Enum | `INVITED` \| `ACTIVE` \| `DEACTIVATED`. Was missing entirely in v1 despite the API exposing `isActive`. |
 | `farmId` | String | FK → `Farm`. |
 | `invitedAt` / `lastLoginAt` | DateTime? | Operational visibility for user management. |
 
-> **No `password` column.** Authentication is entirely Clerk's responsibility. The v1 schema carried
-> a hashed password field that contradicted the stated stack.
+> **No `password` column.** Authentication is entirely Supabase Auth's responsibility; credentials
+> live in the `auth` schema, which this application never writes to. The v1 schema carried a hashed
+> password field that contradicted its own stated stack.
 
 ### Farm
 
@@ -404,6 +599,7 @@ rules that v1 stated in prose but wired to nothing.
 | **I-12** | `crackedEggs + eggsDiscarded <= eggsCollected`, and `eggsCollected <= Flock.currentCount` (a hen cannot lay more than one egg per day). |
 | **I-13** | `logDate` may not precede `Flock.startDate` and may not be in the future in farm-local time. |
 | **I-14** | Deleting a `Flock` is forbidden while dependent logs exist; `DELETE /api/flocks/:id` sets status `ARCHIVED`. |
+| **I-15** | Writes that move stock run in a single Prisma interactive transaction, taking `SELECT … FOR UPDATE` row locks on the affected `InventoryItem` and `Flock` before reading their current values. **Advisory locks MUST NOT be used** — they are session-scoped and do not survive the transaction-mode pooler. |
 
 ---
 
@@ -438,9 +634,10 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Prisma 7 moved connection URLs out of the schema and into prisma.config.ts.
+// Runtime connects through the pooler via the driver adapter in src/lib/db.ts.
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 // ───────────────────────────── Enums ─────────────────────────────
@@ -539,7 +736,7 @@ enum AuditAction {
 
 model User {
   id          String     @id @default(cuid())
-  clerkUserId String     @unique
+  authUserId  String     @unique @db.Uuid // → auth.users.id (Supabase)
   email       String     @unique
   name        String
   role        UserRole   @default(FARM_WORKER)
@@ -1102,7 +1299,9 @@ None of this existed in v1, and the system is non-functional without it:
   `"FarmMembers"`.
 - Circular required FK (`User.farmId` ↔ `Farm.ownerId`) made the first insert impossible.
   `Farm.ownerId` is now nullable.
-- `User.password` removed; `clerkUserId` added. Auth is Clerk-only per the stated stack.
+- `User.password` removed; an external identity link added. *(This was `clerkUserId` when revision 2
+  was written; the platform moved to Supabase later the same day and it is now `authUserId` →
+  `auth.users.id`. See [§ Supabase Integration](#supabase-integration).)*
 - All money columns moved from `Float` to `Decimal`.
 - `onDelete` behaviour declared on every relation; v1 had none.
 

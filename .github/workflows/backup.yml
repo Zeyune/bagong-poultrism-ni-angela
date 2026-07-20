@@ -1,0 +1,121 @@
+# Scheduled database backup.
+#
+# Supabase's free tier has NO automated backups (docs/GAPS.md G-59). Without this,
+# a year of production records and financial history has no recovery path from an
+# accidental DELETE, a bad migration, or project deletion.
+#
+# Runs pg_dump against the DIRECT connection (port 5432, not the pooler — pg_dump
+# needs session state that transaction-mode pooling does not preserve), compresses,
+# and stores the result as a workflow artifact.
+#
+# Required secret:
+#   SUPABASE_DB_URL — postgresql://postgres.<ref>:<password>@<host>:5432/postgres
+#                     Settings → Database → Connection string → URI (Direct)
+#
+# ⚠️ RETENTION: GitHub artifacts expire after 90 days maximum. This protects against
+#    accidents, not against long-term loss. For records that must outlive 90 days,
+#    add an off-site copy (see the commented step at the end).
+#
+# ⚠️ A BACKUP THAT HAS NEVER BEEN RESTORED IS NOT A BACKUP. See docs/GAPS.md G-68 —
+#    a restore rehearsal is a launch prerequisite, not an optional extra.
+
+name: Database backup
+
+on:
+  schedule:
+    # 20:00 UTC Sunday = 04:00 Monday Asia/Manila.
+    - cron: '0 20 * * 0'
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update -qq
+          # Match or exceed the server's major version; a newer client can dump an
+          # older server, but never the reverse.
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+          pg_dump --version
+
+      - name: Dump database
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "::error::SUPABASE_DB_URL is not set. No backup was taken."
+            exit 1
+          fi
+
+          STAMP="$(date -u +'%Y-%m-%dT%H-%M-%SZ')"
+          echo "STAMP=${STAMP}" >> "$GITHUB_ENV"
+
+          # --no-owner / --no-privileges: roles differ between Supabase projects, so
+          #   a dump carrying them will not restore cleanly into a fresh project.
+          # --schema=public: application data only. auth.* is Supabase-managed and
+          #   cannot be restored this way — see the restore note in docs.
+          pg_dump "${SUPABASE_DB_URL}" \
+            --format=plain \
+            --no-owner \
+            --no-privileges \
+            --schema=public \
+            --file="backup-${STAMP}.sql"
+
+          gzip -9 "backup-${STAMP}.sql"
+
+          SIZE=$(stat -c%s "backup-${STAMP}.sql.gz")
+          echo "Backup size: ${SIZE} bytes"
+
+          # A dump this small means the schema is empty or the dump silently failed.
+          if [ "${SIZE}" -lt 1024 ]; then
+            echo "::error::Backup is only ${SIZE} bytes — treating as a failure."
+            exit 1
+          fi
+
+      - name: Verify the dump is readable and contains expected tables
+        run: |
+          set -euo pipefail
+          # Guards against a dump that is well-formed gzip but empty of content.
+          for table in Farm Flock DailyLog InventoryItem; do
+            if ! gunzip -c "backup-${STAMP}.sql.gz" | grep -q "CREATE TABLE public.\"${table}\""; then
+              echo "::error::Table ${table} missing from dump — backup is not trustworthy."
+              exit 1
+            fi
+          done
+          echo "All expected tables present."
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-${{ env.STAMP }}
+          path: backup-*.sql.gz
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Report
+        run: |
+          echo "### Backup complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Artifact: \`db-backup-${STAMP}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Retention: 90 days" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Scope: \`public\` schema only (\`auth\` is Supabase-managed)" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Off-site copy (optional) ─────────────────────────────────────────────
+  # Artifacts vanish after 90 days and disappear entirely if the repository is
+  # deleted. For anything that must survive longer, add a step here pushing the
+  # dump to object storage you control — for example:
+  #
+  #   - name: Upload to Backblaze B2 / S3 / Google Drive
+  #     run: rclone copy "backup-${STAMP}.sql.gz" remote:poultrypilot-backups/
+  #
+  # Deliberately left unconfigured: it needs an account decision, and a broken
+  # step here would fail the whole workflow and silently stop backups.

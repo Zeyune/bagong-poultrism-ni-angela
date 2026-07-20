@@ -1,0 +1,53 @@
+# Keeps the Supabase project awake.
+#
+# Supabase pauses free-tier projects after 7 days without an API request. A paused
+# project needs a manual resume from the dashboard — the farm cannot log data until
+# someone notices. Daily farm use normally prevents this, but a quiet week between
+# broiler cycles does not.
+#
+# This pings a health endpoint that performs a trivial database query, so the
+# activity that matters (Postgres, not just the API gateway) is what gets touched.
+#
+# Required secret:
+#   HEALTHCHECK_URL — https://<your-app>.vercel.app/api/v1/health
+#
+# See docs/GAPS.md G-59 and docs/REQUIREMENTS.md §3.
+
+name: Keep-alive
+
+on:
+  schedule:
+    # 21:00 UTC daily = 05:00 Asia/Manila. GitHub cron is always UTC.
+    - cron: '0 21 * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping health endpoint
+        env:
+          HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${HEALTHCHECK_URL:-}" ]; then
+            echo "::error::HEALTHCHECK_URL is not set. The project will pause after 7 idle days."
+            exit 1
+          fi
+
+          # Retry: a cold start after days of inactivity can exceed a short timeout.
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt}..."
+            if curl --silent --show-error --fail --max-time 60 "${HEALTHCHECK_URL}"; then
+              echo ""
+              echo "Project is awake."
+              exit 0
+            fi
+            if [ "${attempt}" -lt 3 ]; then sleep 30; fi
+          done
+
+          echo "::error::Health check failed after 3 attempts. The Supabase project may be paused."
+          echo "::error::Check https://supabase.com/dashboard and resume it manually if so."
+          exit 1

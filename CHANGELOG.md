@@ -48,6 +48,54 @@ shows why. If the change reverses or supersedes an earlier decision, say so and 
 
 ## 2026-07-20
 
+### Place this repository under version control
+**Type:** Added
+**Files:** `.git/` (all eleven documents committed as `88470fb`)
+**Related:** —
+
+Ran `git init` and committed the full current state of the specification set as the initial commit.
+The repository previously had no version control of any kind.
+
+**Why:** Every historical fact about this repository lived in `CHANGELOG.md` alone, which meant the
+log was doing two jobs at once — recording *what* changed, which a tool does better and
+automatically, and recording *why*, which no tool can. With git carrying diffs, timestamps, and file
+history, the log is free to concentrate on rationale. It also removes a real risk: an unversioned
+specification set has no recovery path from an accidental overwrite, and `DATABASE.md` alone
+represents the resolution of 33 catalogued gaps.
+
+This does not relax the logging rule. Every change is still logged here with a mandatory `Why:`, on
+the reasoning that a commit message records an intention at a moment while this file records the
+decision and the alternatives that were rejected.
+
+**Not verified:** no remote is configured, so nothing is backed up off this machine yet. The commit
+was authored as `Effie <claudeeunika@gmail.com>`, which does **not** match the global git identity on
+this machine (`Zeyune <tankenneth207@gmail.com>`) — see the note below.
+
+---
+
+### Extend the changelog rule to all future projects
+**Type:** Decided
+**Files:** `~/.claude/CLAUDE.md`
+**Related:** —
+
+Promoted this repository's mandatory-changelog rule to a device-wide standing instruction. Every
+project worked on from now on gets a `CHANGELOG.md` with the same format, the same required `Why:`,
+and the same append-only discipline. The file is created on the first substantive change in any
+folder containing code, specifications, or a git repository.
+
+**Why:** The rule proved its worth here and there is no reason it should be local to one repository.
+Superseded alternatives: scaling strictness by project type, so code repositories with git would log
+only decisions and milestones rather than every change (rejected — a rule with exceptions invites
+argument about which case applies, and the reasoning behind a routine-looking edit is exactly what
+gets lost); splitting into a separate `DECISIONS.md` (rejected — the `Decided` type already covers
+it, and two files means two places to forget).
+
+Creation is deliberately scoped to project-like folders rather than literally every directory, so
+that home directories, scratch folders, and read-only checkouts of other people's repositories do
+not accumulate stray changelogs.
+
+---
+
 ### Persist the changelog rule outside the repository
 **Type:** Added
 **Files:** `~/.claude/projects/…/memory/poultrypilot-changelog-rule.md`, `…/memory/MEMORY.md`

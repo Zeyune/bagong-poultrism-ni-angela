@@ -419,7 +419,7 @@ The system SHALL record an immutable audit trail of all business-data changes.
 | **Recoverability** | Automated backups | ⚠️ **None** on the free tier — see below |
 | **Security** | Authorization | RBAC on every route; no unauthenticated access. User `status` re-checked per request |
 | | **Data API** | 🔴 RLS enabled and forced on **every** `public` table, with no policies. Without this the anon key bypasses all RBAC *(G-65)* |
-| | Secrets | Service-role key, JWT secret, and database URLs are server-side only and must never carry a `NEXT_PUBLIC_` prefix *(G-72)* |
+| | Secrets | Service-role key and database URLs are server-side only and must never carry a `NEXT_PUBLIC_` prefix *(G-72)*. No JWT shared secret exists — tokens are ES256-signed and verified against JWKS *(2026-07-21; API.md §2)* |
 | | Environments | Production database credentials scoped to the Production environment only; previews must not reach production data *(G-67)* |
 | | Transport | HTTPS, TLS 1.2+ |
 | | Financial data | Stripped from responses by role, not hidden client-side |

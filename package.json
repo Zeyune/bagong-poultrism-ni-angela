@@ -26,6 +26,8 @@
     "test:no-advisory-locks": "node scripts/check-no-advisory-locks.mjs",
     "test:gates": "npm run test:rls && npm run test:secrets && npm run test:coverage-map && npm run test:no-advisory-locks",
     "verify:step1": "node scripts/verify-step1.mjs",
+    "verify:pooler": "node scripts/verify-pooler.mjs",
+    "check:env": "node scripts/check-env.mjs",
     "test:ci": "npm run typecheck && npm run lint && npm run test && npm run test:gates"
   },
   "dependencies": {

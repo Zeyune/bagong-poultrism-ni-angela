@@ -42,7 +42,12 @@ health_timeout = "2m"
 major_version = 17
 
 [db.pooler]
-enabled = false
+# Enabled deliberately (G-80). Production runs Supabase's transaction-mode pooler,
+# and with this off both DATABASE_URL and DIRECT_URL point at the direct connection
+# on 54322 — so every session-state hazard the pooler imposes (advisory locks
+# vanishing, prepared statements unavailable, SET/temp tables not persisting) is
+# invisible where the code is written. See invariant I-15.
+enabled = true
 # Port to use for the local connection pooler.
 port = 54329
 # Specifies when a server connection can be reused by other clients.

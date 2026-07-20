@@ -49,9 +49,11 @@ pnpm add @prisma/client @supabase/supabase-js @supabase/ssr zod
 pnpm dlx supabase init
 ```
 - Copy the schema from `DATABASE.md` into `prisma/schema.prisma`.
-- `.env.example` with all six variables *(G-72)*: `NEXT_PUBLIC_SUPABASE_URL`,
-  `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`,
+- `.env.example` with all five variables *(G-72)*: `NEXT_PUBLIC_SUPABASE_URL`,
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
   `DATABASE_URL` (pooler, 6543), `DIRECT_URL` (direct, 5432).
+  *(Was six. `SUPABASE_JWT_SECRET` removed 2026-07-21 — tokens are ES256-signed and
+  verified against JWKS, so no shared secret exists. See API.md §2.)*
 
 **Done when**
 - `pnpm prisma validate` passes.

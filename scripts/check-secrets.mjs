@@ -28,9 +28,10 @@ loadEnv({ path: ".env.local", quiet: true });
 loadEnv({ quiet: true });
 
 /** Env vars that must never reach the browser, under any name. */
+// SUPABASE_JWT_SECRET was removed on 2026-07-21: tokens are ES256-signed and
+// verified against the JWKS endpoint, so no shared secret exists to leak.
 const SERVER_ONLY = [
   "SUPABASE_SERVICE_ROLE_KEY",
-  "SUPABASE_JWT_SECRET",
   "DATABASE_URL",
   "DIRECT_URL",
   "SENDGRID_API_KEY",

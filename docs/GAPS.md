@@ -36,6 +36,7 @@ Issues found in the v1 specification set (`PRD.md`, `REQUIREMENTS.md`, `USER_FLO
 | Step 0 scaffold (**opens** G-79) | 0 | 54 / 79 |
 | Step 1 database — **G-65 verified**, G-76, G-79 (**opens** G-80) | 3 | 57 / 80 |
 | Step 2 CI gates — G-71, G-72, G-80 | 3 | **60 / 80** |
+| Local pooler enabled — G-80 fully closed (was *mitigated*) | 0 | **60 / 80** |
 
 **25 open.** The platform move closed two gaps and opened twelve — a net loss on count, though the
 move was still correct on the merits. Two of the new ones are more serious than anything in the
@@ -183,9 +184,12 @@ must never reach the client. The **service-role key bypasses RLS entirely** — 
 client bundle would undo G-65's fix completely and invisibly.
 
 **Fix:** Document the inventory: `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-(public), `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `DATABASE_URL`, `DIRECT_URL`,
-`SENDGRID_API_KEY` (server-only, never `NEXT_PUBLIC_`). Add a CI grep asserting no non-public secret
-appears in the client bundle.
+(public), `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL`, `DIRECT_URL`, `SENDGRID_API_KEY` (server-only,
+never `NEXT_PUBLIC_`). Add a CI grep asserting no non-public secret appears in the client bundle.
+
+*Updated 2026-07-21: `SUPABASE_JWT_SECRET` removed from the inventory. Tokens are ES256-signed and
+verified against the JWKS endpoint, so no shared secret exists — one fewer secret to inventory,
+scope, rotate, or leak. `check:env` now fails if one is present. See API.md §2.*
 
 ### G-73 · Free tier allows two projects — dev and prod consume both 🟡 **MEDIUM** ⬜
 **Docs:** ROADMAP.md
@@ -217,32 +221,49 @@ cost has been asserted rather than measured.
 **Fix:** Measure once the first endpoint exists. If cold starts are unacceptable, the mitigations are
 Prisma's driver adapters, or Supabase's client for read paths.
 
-### G-80 · Pooler-specific failures cannot reproduce locally 🟡 **MEDIUM** ✅ *(mitigated by a grep gate)*
+### G-80 · Pooler-specific failures cannot reproduce locally 🟡 **MEDIUM** ✅ *(closed — local pooler enabled)*
 
-**Mitigation shipped:** `scripts/check-no-advisory-locks.mjs`, wired into CI as
-`test:no-advisory-locks`. It fails the build on any `pg_advisory_lock` /
-`pg_advisory_xact_lock` / `pg_try_advisory_lock` usage outside a comment, and was verified by
-introducing one.
+**Closed 2026-07-21.** `[db.pooler] enabled = true` in `supabase/config.toml` starts the CLI's
+Supavisor container on **54329**, and `DATABASE_URL` now points at it as tenant
+`postgres.pooler-dev` with `?pgbouncer=true&connection_limit=1`. `DIRECT_URL` stays on **54322** for
+migrations. Local topology therefore mirrors production's 6543/5432 split, and
+`npm run verify:pooler` (`scripts/verify-pooler.mjs`) asserts it — 7 checks, all passing.
 
-A grep gate is the honest tool here: the hazard **cannot be reproduced where the code is written**,
-because local Supabase runs no pooler. No test on a developer machine can catch it. Residual risk
-remains for other session-state dependencies (prepared statements, `SET`, temp tables) — a pooled
-CI connection would close that fully and is not yet configured.
+**The earlier mitigation stands:** `scripts/check-no-advisory-locks.mjs` (`test:no-advisory-locks`)
+still fails the build on any `pg_advisory_lock` / `pg_advisory_xact_lock` /
+`pg_try_advisory_lock` outside a comment. It is not redundant — see the finding below.
+
+**Finding — a local pooler is necessary but not sufficient.** Transaction mode does not *discard*
+session state; it only stops *guaranteeing* it. Verified on this machine: a single idle client is
+handed the **same backend on every statement**, so a `SET`, an advisory lock, or a prepared
+statement appears to survive and the code passes locally. Only under concurrency does the backend
+rotate — with 30 concurrent clients over a pool of 20, **30/30 saw more than one backend across 21
+distinct server connections**.
+
+So `verify:pooler` asserts *rotation under concurrency*, not "session state is lost" — the latter is
+not a property the pooler offers and an assertion on it would fail intermittently. The practical
+consequence: a single-threaded integration test against the pooler **can still give false
+confidence**. The grep gate remains the reliable catch for advisory locks specifically; prepared
+statements are covered by `pgbouncer=true`. Residual risk stays open for `SET` and temp-table
+dependence introduced in code that is never exercised concurrently.
 
 ### G-72 · No secrets or environment inventory ✅ *(closed — `.env.example` + `test:secrets` gate)*
 **Docs:** DATABASE.md, TESTING.md, PHASE1_PLAN.md
 
-Local Supabase does **not** start the pooler container, so `DATABASE_URL` and `DIRECT_URL` point at
-the same direct connection on 54322. Every constraint that transaction-mode pooling imposes —
-advisory locks silently failing, prepared statements being unavailable — is therefore **invisible in
-local development**.
+Nothing enumerated which environment variables the system needs, which of them are secret, or what
+distinguishes the two. With Next.js the distinction is load-bearing and silent: any variable prefixed
+`NEXT_PUBLIC_` is inlined into the **client bundle** at build time. Prefixing the service-role key —
+which **bypasses RLS** — would publish it to every visitor and undo the G-65 lockdown invisibly, with
+no error and nothing in a diff to notice.
 
-This is precisely the failure mode I-15 warns about: advisory locks work fine against a direct
-connection and fail silently in production. Local testing would give false confidence.
+**Closed by:** `.env.example` documents all six variables *(PHASE1_PLAN.md Step 0)* and marks each
+public or server-only. `scripts/check-secrets.mjs`, wired into CI as `test:secrets`, greps the client
+source **and the built bundle** for every server secret's value and fails the build on a hit. This is
+the TESTING.md check "no non-public secret appears in the built client bundle".
 
-**Fix:** CI must run at least one integration suite against a pooled connection, or a test must
-assert that no `pg_advisory_lock` call exists in the codebase. A grep-based gate is cheap and
-catches the realistic case (someone reaches for an advisory lock because it works on their machine).
+**Correction (2026-07-21).** This entry previously carried G-80's body text — the paragraphs about
+the local pooler — leaving G-72 itself with no description at all despite being marked closed. The
+text above is new. G-80's own entry holds that content and is unaffected.
 
 ### G-79 · No Docker on the development machine ✅ *(closed — Docker 29.6.2 installed and verified)*
 **Docs:** TESTING.md, PHASE1_PLAN.md

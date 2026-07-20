@@ -57,9 +57,17 @@ Supabase Auth issues the JWT; the route handler verifies it and enforces RBAC.
 Authorization: Bearer <supabase_access_token>
 ```
 
-Each request verifies the token against the Supabase JWT secret, extracts the `auth.users` UUID from
+Each request verifies the token's **signature against Supabase's JWKS endpoint**
+(`${NEXT_PUBLIC_SUPABASE_URL}/auth/v1/.well-known/jwks.json`), extracts the `auth.users` UUID from
 `sub`, loads the local `User` by `authUserId`, and rejects the request if the user is missing or
 `status != ACTIVE`.
+
+> **Revision 2 note — asymmetric keys, no shared secret** *(decided 2026-07-21)*. This previously read
+> "verifies the token against the Supabase JWT secret". Supabase signs with asymmetric keys (ES256);
+> the token header carries a `kid` and the public key is fetched from JWKS and cached. There is
+> therefore **no `SUPABASE_JWT_SECRET`** — the variable was removed from the environment inventory
+> *(G-72)*. Verification is local and does not call the Auth server. Verified against the local stack:
+> tokens are issued `{"alg":"ES256","kid":"<uuid>"}` matching the JWKS `kid`.
 
 > **The status check runs on every request, not only at sign-in** *(BR-11)*. Supabase access tokens
 > remain valid until they expire, so a user deactivated mid-session still holds a working token.

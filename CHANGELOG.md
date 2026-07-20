@@ -75,6 +75,285 @@ Every entry from here on carries a real `Time:` taken from the clock at the mome
 
 ## 2026-07-21
 
+### Stop check:env crashing libuv on exit
+**Time:** 03:21 +08:00
+**Type:** Fixed
+**Files:** `scripts/check-env.mjs`
+**Related:** G-72 · follows the 03:02 entry
+
+`process.exit()` fired while the JWKS `fetch` keep-alive socket was still closing, tripping
+`Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)` on Windows. Replaced with
+`process.exitCode`, so the event loop drains first, and added `connection: close` to the fetch so
+undici does not pool the socket at all. Verified both paths: `.env.local` exits 0 with no assertion,
+`.env.example` exits 1.
+
+**Why:** the crash printed *after* the results, so the output looked complete and correct — but a
+process aborting on an assertion does not reliably return the exit code it set. `check:env` is
+intended to gate deployments, and a gate whose exit status is decided by a race is worse than no
+gate: it fails open, silently, on the platform this project is developed on. Introduced by the JWKS
+check added at 03:02; that check was the first network call in the script.
+
+---
+
+### Verify access tokens against JWKS and remove SUPABASE_JWT_SECRET entirely
+**Time:** 03:02 +08:00
+**Type:** Decided · Changed · Removed
+**Files:** `docs/API.md`, `docs/REQUIREMENTS.md`, `docs/PHASE1_PLAN.md`, `docs/GAPS.md`, `.env.example`, `.env.local`, `scripts/check-env.mjs`, `scripts/check-secrets.mjs`
+**Related:** G-72 · API.md §2 · precedes Step 3 (auth)
+
+`API.md` §2 previously specified verifying each request "against the Supabase JWT secret". It now
+specifies verifying the signature against the JWKS endpoint derived from `NEXT_PUBLIC_SUPABASE_URL`.
+`SUPABASE_JWT_SECRET` is removed from the environment inventory, from `.env.example`, `.env.local`,
+and from both `check-env.mjs` and `check-secrets.mjs` — `check:env` now **fails** if one is present,
+because a lingering secret implies a verification path that no longer exists.
+
+**Why:** Supabase signs access tokens asymmetrically (ES256) and publishes the public key at
+`/auth/v1/.well-known/jwks.json`. Their guidance calls symmetric shared secrets "not recommended for
+production". Verification stays local and never calls the Auth server, so nothing is lost — and the
+secret that no longer exists cannot be inventoried wrong, scoped wrong, rotated late, or leaked. Two
+credentials came close to leaking in this session alone; removing one outright is worth more than
+handling it carefully.
+
+**Verified against the running local stack, not assumed:**
+- `GET /auth/v1/.well-known/jwks.json` serves `{kid: b81269f1-…, alg: ES256, kty: EC, use: sig}`
+- a real signup returns a token whose header is `{"alg":"ES256","kid":"b81269f1-…","typ":"JWT"}` —
+  the same `kid`, so local genuinely signs asymmetrically and needs no compatibility path
+- `check:env --connect` now asserts both, and that the algorithm is not `HS*`
+- all four CI gates pass; `test:secrets` now tracks 3 secrets rather than 4
+
+**Rejected:** using the legacy shared secret and migrating later — it builds the auth core on the
+deprecated path and the migration would then invalidate every live session. Also rejected: treating
+the shared secret as permanent. Both were viable; neither survives the fact that migrating costs
+nothing today, with no users and no sessions, and cannot be said of any later date.
+
+**Resolves the open question from the 01:41 entry.** The UUID in `SUPABASE_JWT_SECRET` was a signing
+**key ID**, exactly as suspected — local's JWKS `kid` has the identical shape. It was never a secret,
+so its earlier appearance in the transcript is not an exposure.
+
+**Effie's cloud project is mid-migration** and still shows "Legacy JWT secret (still used)" alongside
+current and previous asymmetric keys. It must be switched to the asymmetric key before deploy;
+`check:env .env.cloud --connect` will fail the new JWKS assertions until it is. Local is unaffected.
+
+**Not verified:** no `requireUser()` exists yet — this changes what Step 3 will build, and the JWKS
+fetch-and-cache path has not been exercised by application code. Cache invalidation on key rotation
+is unaddressed and belongs to Step 3.
+
+---
+
+### Name the offending character instead of listing all six
+**Type:** Changed
+**Time:** 02:36 +08:00
+**Files:** `scripts/check-env.mjs`
+**Related:** G-72 · refines the 02:14 entry
+
+The reserved-character check now reports which characters were found, and special-cases a password
+still wrapped in `[ ]` with a message saying to delete the brackets. Verified against the real file:
+it identifies the bracket case directly.
+
+**Why:** the previous message — "contains one of @ / ? # [ ]" — was accurate and still not actionable.
+Effie read the failing output as success and said the setup was done, which is the clearest possible
+evidence that a diagnostic naming six possibilities does not communicate. The real cause was the
+commonest one: the dashboard renders its placeholder as `[YOUR-PASSWORD]`, brackets included, and
+replacing the words while keeping the brackets leaves two reserved characters behind. Worth the small
+amount of information the message now reveals about the value.
+
+---
+
+### Add a non-recording password encoder
+**Type:** Added
+**Time:** 02:22 +08:00
+**Files:** `scripts/encode-password.py`
+**Related:** G-72 · follows the 02:14 entry
+
+`python scripts/encode-password.py` reads a password with `getpass` (no echo, not recorded),
+percent-encodes every reserved character with `quote(safe="")`, and copies the result to the
+clipboard. `--print` outputs to stdout instead. Verified: Python 3.14.5 present, encoding correct
+against a dummy value, tkinter clipboard works and survives interpreter exit.
+
+**Why:** requested, after `check:env` identified an unencoded password as the cause of the cloud
+connection failure. Encoding by hand across a dozen substitution rules, twice, in a value you cannot
+see while typing, is error-prone in a way that produces the same misleading auth error as before.
+
+**Why it refuses a command-line argument:** a password passed as argv is written to PowerShell
+history, where it persists on disk long after the terminal closes. `safe=""` rather than the default
+`safe="/"` because a slash is one of the characters that breaks a connection URL.
+
+**Limits stated in the file rather than implied:** the clipboard is readable by any process until
+overwritten, `--print` leaves the value in terminal scrollback permanently, and Python strings cannot
+be reliably erased from memory. The script reduces exposure; it is not a secrets manager and the
+docstring says so.
+
+**Note:** the first Python file in an otherwise Node project. Kept out of `package.json` scripts,
+since it is a one-off human utility and not part of any automated flow.
+
+---
+
+### Detect unencoded reserved characters in database-URL passwords
+**Time:** 02:14 +08:00
+**Type:** Added
+**Files:** `scripts/check-env.mjs`
+**Related:** G-72 · I-15
+
+`check:env` now inspects the password portion of `DATABASE_URL` and `DIRECT_URL` for unencoded
+`@ / ? # [ ]`, and separately cautions when a password looks already percent-encoded. Caught the real
+case on the first run.
+
+**Why:** a password pasted verbatim from the Supabase dashboard truncates at the parser, and Postgres
+reports the result as `password authentication failed for user "postgres"` — **identical to the
+message for a genuinely wrong password**. Effie hit exactly this and had no way to tell the two apart;
+the obvious next move (resetting the password) would not have fixed it, and could have been repeated
+several times before the cause became apparent. The connection error is also misleading in a second
+way: it names user `postgres` rather than `postgres.<ref>`, because Supavisor strips the tenant suffix
+before connecting, which makes the username look wrong when it is not.
+
+**Recommended fix recorded as alphanumeric-password-by-default,** not encoding. Encoding is correct
+but has to be redone every time the string is copied — to Vercel, to CI, to another machine — and
+fails the same indistinguishable way each time it is forgotten.
+
+---
+
+### Make check:env honour --connect when run through npm
+**Time:** 01:50 +08:00
+**Type:** Fixed
+**Files:** `scripts/check-env.mjs`
+**Related:** G-72
+
+`npm run check:env .env.local --connect` never reached the live-connection stage: npm claims unknown
+`--` flags as its own config rather than forwarding them to `process.argv`. The script now also reads
+`npm_config_connect`, which is where npm puts them. Usage in the file header corrected to the `npm run`
+form that was actually documented to Effie. Re-verified: `.env.local` now reports 18/18 with both
+database URLs connecting.
+
+**Why:** the flag failed *silently in the direction of looking successful* — the run completed, every
+check passed, and the only signal that connectivity had not been tested was one line of npm warning
+above the output. Someone confirming an environment before a deploy would reasonably have read that as
+"the database URLs work". A check that quietly downgrades itself is worse than one that errors.
+
+---
+
+### Add an env validator that checks credentials without printing them
+**Time:** 01:41 +08:00
+**Type:** Added
+**Files:** `scripts/check-env.mjs`, `package.json`
+**Related:** G-72 · I-15 · G-80
+
+`npm run check:env <file> [--connect]` validates any env file for presence, unfilled placeholders,
+key-format correctness, the client/server boundary, and connection topology. Values are never
+printed — only a short prefix and a character count, which is enough to identify a misplaced paste
+but not enough to leak the value into a terminal log, a screen share, or a chat transcript.
+`.env.local` scores 18/18 including live connections; `.env.cloud` scores 9 passed / 5 failed.
+
+**Why:** Effie asked how they could tell whether the values they had pasted were right without
+someone reading the file. That is the correct instinct and it deserved a tool rather than an answer —
+"ask someone to look" does not scale, cannot run before a deploy, and requires exposing the secrets
+to whoever looks.
+
+**It immediately caught a real error.** `SUPABASE_SERVICE_ROLE_KEY` in `.env.cloud` held a verbatim
+copy of the publishable key. That fails in a particularly bad direction: the app would appear to work
+for anonymous reads while every server-side operation that relies on bypassing RLS silently lost its
+privileges — and a public key would be sitting in the slot the codebase treats as its most sensitive
+secret.
+
+**Key format resolved.** The project uses Supabase's new system (`sb_publishable_…` / `sb_secret_…`),
+answering the question flagged as unverified in the 01:28 entry. The validator accepts both systems.
+`SUPABASE_JWT_SECRET` currently holds a UUID, which is more likely a signing-**key ID** than a
+signing secret; flagged as a caution rather than a failure because it has not been confirmed.
+
+**Credential exposure, recorded deliberately.** The publishable key and that UUID reached the
+assistant's context, and therefore the session transcript, because the IDE forwards the contents of
+edited files automatically — this happened despite explicit advice not to paste secrets into chat,
+which means the advice was wrong rather than ignored. Impact is low: the publishable key is public by
+design and the project has no tables for an anon key to reach. Both should still be rotated once the
+JWT field is understood. **Future guidance:** treat any file open in the editor as visible, and keep
+real secrets out of files being actively edited during a session.
+
+---
+
+### Add an inert holding file for the cloud Supabase credentials
+**Time:** 01:28 +08:00
+**Type:** Added
+**Files:** `.env.cloud` (gitignored, placeholders only)
+**Related:** G-65, G-66, G-72 · **Decided:** cloud setup deferred
+
+A Supabase cloud project (`gqbunpzlvibsajvkjlud`) now exists. Added `.env.cloud` with the six
+variable names, the project URL, and empty values for Effie to fill in from the dashboard. Confirmed
+gitignored via `git check-ignore`.
+
+**Why the name is not `.env.production.local`:** Next.js auto-loads that filename during
+`next build`, so a local production build would silently connect to the cloud project — against a
+database with no schema and, more to the point, no G-65 lockdown yet. `.env.cloud` is loaded by
+nothing until something is explicitly pointed at it.
+
+**Decided — Step 3 is built against the local stack, not the cloud.** Rejected: provisioning the
+cloud project now (migrations, RLS lockdown, custom SMTP) and rejected wiring Vercel alongside it.
+Both delay Step 3, and neither is needed by it. The stronger reason is that developing against the
+cloud project would put real rows behind a live Data API before G-65 has ever been verified there —
+exactly the exposure G-65 describes. Revisit before the first deploy.
+
+**Unverified:** Supabase has moved to a new key format (`sb_publishable_…` / `sb_secret_…`) with
+asymmetric JWT signing keys, and I could not confirm which a project created today defaults to. The
+local stack emits both formats, but `.env.example` and `.env.cloud` still use the legacy
+`anon`/`service_role`/JWT-secret naming. To be reconciled against the actual dashboard before any
+Supabase client code is written.
+
+---
+
+### Give G-72 its own description, which it had lost to a mis-paste
+**Time:** 01:24 +08:00
+**Type:** Fixed
+**Files:** `docs/GAPS.md`
+**Related:** G-72 · G-80
+
+The `G-72 · No secrets or environment inventory` entry was followed by G-80's body — the paragraphs
+about the local pooler and advisory locks — so G-72 was marked closed with no statement of what the
+gap ever was. Wrote a real description: why the `NEXT_PUBLIC_` prefix is load-bearing, and what
+`.env.example` plus the `test:secrets` gate actually close. Left a dated correction note in place
+rather than removing the trace.
+
+**Why:** a gap marked ✅ with someone else's text under it is worse than an open one — a reader
+checking whether secrets were ever thought about finds a confident tick and a paragraph about
+connection pooling, and cannot tell the record is broken. Found while closing G-80; not introduced
+by that work.
+
+---
+
+### Enable the local Supavisor pooler so production's connection topology reproduces locally
+**Time:** 01:10 +08:00
+**Type:** Added
+**Files:** `supabase/config.toml`, `.env.local` (gitignored), `.env.example`, `scripts/verify-pooler.mjs`, `package.json`, `docs/GAPS.md`
+**Related:** G-80 (mitigated → **closed**) · I-15 (DATABASE.md)
+
+Set `[db.pooler] enabled = true`, which starts the CLI's Supavisor container on **54329**. `DATABASE_URL`
+now points at it as tenant `postgres.pooler-dev` with `?pgbouncer=true&connection_limit=1`; `DIRECT_URL`
+stays on **54322** for migrations. This mirrors production's 6543/5432 split. Added
+`npm run verify:pooler` — 7 checks, all passing — and re-ran `verify:step1` (11/11) against the new
+topology.
+
+**Why:** both URLs previously pointed at the same direct connection on 54322, so every constraint
+transaction-mode pooling imposes was invisible where the code is written. Step 3 is about to write the
+first Vitest suite; without this it would be written against direct-connection semantics and would pass
+locally while the assumptions underneath it were wrong in production.
+
+**Finding that changes what this closes.** Transaction mode does not *discard* session state, it only
+stops *guaranteeing* it — and a single idle client is handed the **same backend on every statement**.
+Measured here: a lone client kept one backend across 5 statements, so a `SET` survived and the first
+version of the verification script failed on an assertion that it wouldn't. Only under concurrency does
+the backend rotate — 30 concurrent clients over a pool of 20 gave **30/30 seeing more than one backend
+across 21 distinct server connections**.
+
+So the script asserts *rotation under concurrency*, not "session state is lost": the latter is not a
+property the pooler offers and asserting it would fail intermittently. The consequence is worth stating
+plainly — **a single-threaded integration test against the pooler can still give false confidence**, so
+the `test:no-advisory-locks` grep gate is not redundant and stays. Residual risk remains for `SET` and
+temp-table dependence in code never exercised concurrently; that is recorded on G-80 rather than
+claimed as covered.
+
+**Not verified:** nothing exercises the pooler through Prisma's driver adapter yet — `src/lib/db.ts`
+reads `DATABASE_URL`, but no application code path has run against it. The checks above use `pg`
+directly. Restarted via `supabase stop --backup`, so the database survived rather than being reseeded.
+
+---
+
 ### Add a Time field to the changelog format
 **Time:** 00:52 +08:00
 **Type:** Changed

@@ -19,6 +19,7 @@ Newest entries go at the **top** of the log, under a date heading. Use this shap
 ## YYYY-MM-DD
 
 ### <Imperative summary of the change>
+**Time:** HH:MM +08:00
 **Type:** Added | Changed | Removed | Fixed | Decided | Deprecated
 **Files:** `path/one.md`, `path/two.ts`
 **Related:** G-07, G-08 (GAPS.md) · FR-04 (PRD.md)
@@ -43,10 +44,86 @@ shows why. If the change reverses or supersedes an earlier decision, say so and 
    delete a past entry — if it was wrong, say so in a new one.
 6. **Link the gap IDs.** If the change resolves or creates an item in [GAPS.md](docs/GAPS.md), reference
    it, and update that item's status in the same session.
+7. **`Time:` is required**, in `HH:MM` with the UTC offset. Farm-local time is Asia/Manila (+08:00),
+   the same authority `Farm.timezone` sets for the application itself — one clock for the project and
+   the system it describes.
+
+---
+
+## A note on timestamps before 2026-07-21 00:50
+
+**Entries above that point carry a date but no time, and cannot be given one accurately.**
+
+Time-of-day was not recorded when they were written, and it is not recoverable after the fact. The
+only hard evidence is the git history, which fixes four moments:
+
+| Commit | Time (+08:00) | Covers |
+|:---|:---|:---|
+| `c4d7cf7` | 2026-07-20 21:47 | Initial commit — the v1 specification set |
+| `1f89f82` | 2026-07-20 21:47 | Git initialisation and the device-wide changelog rule |
+| `c4460e9` | 2026-07-20 21:55 | Authorship correction |
+| `9dff7a9` | 2026-07-21 00:46 | Scaffold and Phase 1 steps 0–2 |
+
+Everything else on 2026-07-20 falls between roughly 21:00 and midnight, and everything on 2026-07-21
+before 00:50 falls after that — but the individual entries cannot be placed within those windows.
+
+**No times have been invented to fill the gap.** A fabricated timestamp is worse than an absent one:
+it makes the record look more precise than it is, and a reader has no way to tell which is which.
+Every entry from here on carries a real `Time:` taken from the clock at the moment of writing.
 
 ---
 
 ## 2026-07-21
+
+### Add a Time field to the changelog format
+**Time:** 00:52 +08:00
+**Type:** Changed
+**Files:** `CHANGELOG.md`
+**Related:** —
+
+Added `**Time:**` to the entry template and to the rules as item 7, in `HH:MM` with the UTC offset.
+Added a note explaining why the 31 entries written before 00:50 today have none.
+
+**Why:** requested. Date-only granularity was fine while this was a specification repository where a
+day's work was one logical change; it stops being fine now that several changes can land in an hour
+and their order matters for reconstructing what caused what.
+
+**Times were NOT backfilled onto earlier entries.** Time-of-day was not recorded when they were
+written and cannot be recovered — git fixes only four moments across 31 entries. Inventing the rest
+would make the log look more precise than it is, and a reader could not tell the invented values from
+the real ones. The four git-anchored timestamps are recorded as the bounds that genuinely exist, and
+the gap is stated plainly instead of being filled.
+
+Farm-local time (+08:00) is used rather than UTC, matching `Farm.timezone` — the project and the
+system it describes now keep the same clock.
+
+---
+
+### Rename the project folder to match the remote
+**Time:** 00:52 +08:00
+**Type:** Changed
+**Files:** — (directory rename, no file contents changed)
+**Related:** —
+
+The working directory becomes `bagong-poultrism-ni-angela`, matching the GitHub repository. Nothing
+inside the repository changes; the rename is external to git, which tracks contents rather than the
+directory holding them.
+
+**Why:** the local folder and the remote had different names, which invites confusion in paths,
+scripts, and conversation about where the project actually lives.
+
+**Consequences, handled deliberately:**
+- **Supabase containers are named after the folder** (`supabase_db_prd-poultrypilot`). They were
+  stopped and removed *before* the rename so they are not orphaned — otherwise `supabase stop` would
+  no longer find them and they would sit consuming memory with no obvious owner. Docker images stay
+  cached, so the next `supabase start` is fast rather than another 8 GB pull.
+- **The database volume is destroyed** by the stop. Everything in it is reproducible:
+  `prisma migrate deploy` then `npm run db:sql` rebuilds schema, RLS, triggers, and seed data. No
+  real data existed.
+- **The Claude Code session cannot survive its own working directory disappearing** and must be
+  restarted in the new path.
+
+---
 
 ### Replace the boilerplate README
 **Type:** Changed

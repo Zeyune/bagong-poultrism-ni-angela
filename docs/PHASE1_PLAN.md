@@ -151,7 +151,7 @@ provisions in-transaction, idempotent).
 
 ---
 
-## Step 3 · Auth and session (FR-10, part 1) 🟡 **CORE COMPLETE**
+## Step 3 · Auth and session (FR-10, part 1) ✅ **COMPLETE**
 **~4 days**
 
 > **Built and tested (2026-07-21):** the full auth layer — `@supabase/ssr` clients, the session
@@ -170,10 +170,15 @@ provisions in-transaction, idempotent).
 >   step. No gate catches schema-vs-client drift.
 > - **BR-10 self-signup confirmed fail-closed** — no `farmId` metadata → no row, by design.
 >
-> **Still open — NOT yet verified:** the full cookie-session HTTP round trip through `proxy` +
-> `requireUser`, and the browser sign-in form. Automated tests cover the authorization core, not the
-> end-to-end browser flow. Needs a manual smoke test (creating a real invited user and signing in) —
-> this is the "Done when" below and folds into the Step 9 pre-launch checks.
+> **Verified end-to-end (2026-07-21 20:31).** A smoke test drove a real sign-in and replayed the
+> session cookies against a running `next dev` — 9/9 checks: `/health` touches the DB; `/users/me`
+> with no session → 401; `/` with no session → redirect to `/sign-in`; the BR-10 trigger provisions
+> an ACTIVE ADMIN; a signed-in request to `/users/me` → 200 with the correct user and envelope; `/`
+> → the authed landing; and **FR-10.7 over live HTTP** — deactivating the user in the database refuses
+> the very next request (403) on the same still-valid token. This exercises the whole path —
+> `proxy` → `requireUser` → `getClaims` (JWKS) → `resolveActiveUser` — that the Vitest suite cannot.
+> The only thing not automated is a human clicking the sign-in form itself; the server-side flow it
+> drives is proven.
 
 **Build**
 - Supabase Auth sign-in/out; `proxy.ts` refreshing the session (was `middleware.ts` — renamed in Next 16).

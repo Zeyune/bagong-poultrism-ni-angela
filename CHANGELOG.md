@@ -75,6 +75,33 @@ Every entry from here on carries a real `Time:` taken from the clock at the mome
 
 ## 2026-07-21
 
+### Verify Step 3 end-to-end — the cookie-session HTTP round trip the unit suite can't reach
+**Time:** 20:31 +08:00
+**Type:** Added
+**Files:** — *(verification only; the temp smoke script was run from the project root and deleted, not committed)*
+**Related:** FR-10.7, BR-11 · closes the open item from the 20:20 Step 3 entry · PHASE1_PLAN.md Step 3
+
+Ran a smoke test against a live `next dev`: signed in for real with `@supabase/ssr` (in-memory cookie
+jar), then replayed the exact session cookies over HTTP — same library and keys as the app, so the
+cookie names and encoding match what the server parses. 9/9 passed, covering `/health`, the 401 and
+redirect paths with no session, BR-10 provisioning, an authed `/users/me` (200 + envelope), the authed
+landing, and **FR-10.7 end-to-end**: deactivating the user in the database refuses the next request
+(403) on the same still-valid token. Step 3 is now ✅ COMPLETE in PHASE1_PLAN.
+
+**Why:** the 20:20 entry was explicit that automated tests covered the authorization *core* but not the
+cookie-session HTTP path through `proxy` → `requireUser` → `getClaims` → `resolveActiveUser`, and told
+the reader not to mistake the green Vitest suite for a working end-to-end flow. That gap is now closed
+with evidence rather than left as a claim. The one thing still unexercised is a human clicking the
+sign-in form; the entire server-side path it drives is proven.
+
+**Not kept as a committed test — flagged.** The smoke script needs a running dev server and creates
+then deletes a real auth user, so it does not belong in the Vitest suite or a CI gate as written.
+Verified afterward that it left no residual `smoke-%` rows in `auth.users` or `public."User"`. Whether
+to formalise it as a `scripts/smoke-step3.mjs` (parallel to `verify-step1.mjs`, run manually or in a CI
+job that boots the server) is an open call, deferred rather than decided.
+
+---
+
 ### Build Step 3 — authentication, session, and the first API routes (FR-10 part 1)
 **Time:** 20:20 +08:00
 **Type:** Added

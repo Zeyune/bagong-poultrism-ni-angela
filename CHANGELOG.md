@@ -75,6 +75,37 @@ Every entry from here on carries a real `Time:` taken from the clock at the mome
 
 ## 2026-07-21
 
+### Audit the built code (Steps 3–5) against the specs; log findings to IMPLEMENTATION_GAPS.md
+**Time:** 23:24 +08:00
+**Type:** Added
+**Files:** `docs/IMPLEMENTATION_GAPS.md`
+**Related:** FR-10, FR-13, FR-01 · API.md §3 · G-45, G-71, G-76 · BR-64/65
+
+Ran a three-reviewer implementation-vs-spec audit (auth, audit-trail, API conventions) plus a GAPS.md
+cross-pass, and logged every finding to a new `docs/IMPLEMENTATION_GAPS.md` — deliberately separate
+from GAPS.md (which is spec-vs-spec). **Nothing was fixed**, at Effie's request: they are running an
+independent review to verify the findings, so they are recorded as-found with `IMPL-xx` IDs, severity,
+spec references, and `file:line` code references.
+
+**Verdict:** no High-severity holes in what is built; Steps 3–5 conform. Findings are Medium/Low/latent:
+the notable ones are the missing `sort` param on list endpoints (IMPL-01), AuditLog immutability being
+convention-only rather than DB-enforced (IMPL-03), and the audit trigger's hardcoded table allowlist
+(IMPL-04 — Phase 1 fully covered, but Phase 2 tables would need manual addition).
+
+**Why:** Effie asked whether all holes and gaps are covered and to re-check the documents. A written,
+verifiable audit report is the honest answer — and keeping it separate from GAPS.md preserves that
+file's spec-contradiction purpose while giving the independent reviewer a single checklist.
+
+**One correction recorded in the report:** a reviewer called the audit allowlist "omits most business
+entities", which is misleading — it omits only not-yet-built Phase 2 entities; every Phase 1 table
+(including Step 6/7's DailyLog, WeightRecord, InventoryItem, InventoryTransaction) is audited. Verified
+directly at `supabase/sql/040_audit_trigger.sql:92-94`.
+
+**Not verified (standing caveat):** `prisma validate` and live trigger execution were not run; schema
+and SQL correctness in the report are by inspection.
+
+---
+
 ### Build bird edit/remove — closing the last Step 5 contract gap (API.md §6.1)
 **Time:** 23:06 +08:00
 **Type:** Added

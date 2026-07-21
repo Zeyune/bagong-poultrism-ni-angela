@@ -232,8 +232,28 @@ provisions in-transaction, idempotent).
 
 ---
 
-## Step 5 · Flocks and birds (FR-01)
+## Step 5 · Flocks and birds (FR-01) 🟡 **API COMPLETE**
 **~4 days**
+
+> **API built and tested (2026-07-21).** `POST/GET /flocks`, `GET/PATCH /flocks/:id`,
+> `POST /flocks/:id/status`, and the birds sub-resource (`POST/GET /flocks/:id/birds`). 10 tests
+> (27 total); all gates and build green. Validation via zod; the flock state machine (BR §3.1) is a
+> table in `src/lib/flocks/lifecycle.ts`.
+>
+> **What surfaced:**
+> - **First real exercise of `withAdminActor`** — a test confirms creating a flock through the route
+>   writes an audit row attributed to the admin, closing Step 4's "not verified through a live
+>   endpoint" gap.
+> - **`type` (BR-02) and `currentCount` (BR-13) refused via a strict PATCH schema** — sending either
+>   is a 400 and the flock is unchanged (FR-01.3).
+> - **No DELETE route** (I-14, FR-01.4); archiving is `INACTIVE`/`PROCESSED` → `ARCHIVED`.
+> - **Cascade-delete audit needs context** — hard-deleting a flock cascades to farm-less Bird rows
+>   whose audit trigger needs the `farmId` GUC; production never hard-deletes a flock, so this only
+>   affects test cleanup (run inside the actor context).
+>
+> **Still remaining for this step:** the UI — flock list and detail, create form, and the
+> consequence-naming status-change confirmation. The API and its acceptance criteria (FR-01.1–01.6)
+> are done; the screens are not.
 
 **Build** — `POST/GET/PATCH /api/v1/flocks`, `POST /api/v1/flocks/:id/status`, birds sub-resource.
 Flock list and detail UI, create form, status change with consequence-naming confirmation.

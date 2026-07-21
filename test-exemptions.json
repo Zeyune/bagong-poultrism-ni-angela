@@ -31,7 +31,6 @@
   },
 
   "requirements": {
-    "FR-01": "flock CRUD — Step 5",
     "FR-02": "daily logs — Step 6",
     "FR-03": "weight sampling — Step 6",
     "FR-04": "health and treatment — P1, not in this phase",

@@ -75,6 +75,50 @@ Every entry from here on carries a real `Time:` taken from the clock at the mome
 
 ## 2026-07-21
 
+### Build Step 5 — the flocks and birds API (FR-01)
+**Time:** 21:28 +08:00
+**Type:** Added
+**Files:** `src/app/api/v1/flocks/route.ts`, `src/app/api/v1/flocks/[id]/route.ts`, `src/app/api/v1/flocks/[id]/status/route.ts`, `src/app/api/v1/flocks/[id]/birds/route.ts`, `src/lib/validation/flock.ts`, `src/lib/flocks/lifecycle.ts`, `src/lib/flocks/serialize.ts`, `src/lib/api/validation.ts`, `tests/step5-flocks.integration.test.ts`, `test-exemptions.json`, `docs/PHASE1_PLAN.md`
+**Related:** FR-01, BR-02, BR-04, BR-13, BR-17, I-14, BR §3.1 · closes the FR-01 exemption
+
+Flock CRUD, the status state machine, and optional bird tagging: `POST/GET /flocks`,
+`GET/PATCH /flocks/:id`, `POST /flocks/:id/status`, `POST/GET /flocks/:id/birds`. zod validation, the
+API.md §3 envelope, per-farm scoping (out-of-farm → 404, not 403). 10 tests (27 total); all gates and
+`next build` green.
+
+**Design points:**
+- **The state machine is a table** (`ALLOWED_TRANSITIONS`, `src/lib/flocks/lifecycle.ts`) matching
+  BR §3.1. Invalid transitions (e.g. ACTIVE → ARCHIVED) return 422 naming what is allowed. PROCESSED
+  is a source only — it is entered by a ProcessingEvent (BR-16, Phase 2), never by assignment.
+- **`type` and `currentCount` are refused by a strict PATCH schema** — sending either is a 400 with the
+  flock unchanged (BR-02, BR-13, FR-01.3). `currentCount` is set to `initialCount` at creation and
+  otherwise system-maintained.
+- **No DELETE handler** (I-14, FR-01.4). Archiving is the terminal path.
+- **Uniqueness** — duplicate flock name per farm and duplicate bird tag per flock are DB constraints
+  (`@@unique`), surfaced as 409 (FR-01.2, FR-01.5); the same tag in another flock succeeds (FR-01.6).
+- **Broilers default to a 45-day cycle** (BR-04); layers carry null. `daysToProcessing` is derived,
+  never a hardcoded 45.
+
+**Closes Step 4's open gap.** A test confirms that creating a flock through the live route writes an
+`AuditLog` row attributed to the admin — so `withAdminActor` → actor context → trigger is proven
+end-to-end, not just via `runWithActor` in isolation.
+
+**Surfaced — cascade-delete audit needs context.** Hard-deleting a flock cascades to its Bird rows,
+and the Bird audit trigger needs a `farmId`, which a farm-less Bird row supplies only from the
+`app.farm_id` GUC. Production never hard-deletes a flock (FR-01.4), so this is a test-only concern; the
+Step 5 cleanup runs its deletes inside the actor context. Noted as a real property of the trigger
+design, not worked around silently.
+
+**Not done — the UI.** Step 5 also calls for flock list/detail screens, a create form, and the
+consequence-naming status-change confirmation. Only the API and its acceptance criteria (FR-01.1–01.6)
+are delivered here; the screens remain, so the step is marked 🟡 API COMPLETE, not done.
+
+**Not verified:** the routes are exercised by calling their handlers directly with a mocked session
+(as in Step 4), not over real HTTP through `next dev`. The date/timezone handling for
+`daysToProcessing` and the audit filter hardcodes Asia/Manila +08:00 (exact for this farm).
+
+---
+
 ### Build Step 4 — the audit trail (FR-13), as database triggers
 **Time:** 21:11 +08:00
 **Type:** Added · Decided

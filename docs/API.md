@@ -595,9 +595,16 @@ Everything marked **`P1`**, consolidated for planning:
 | Weight records | create, list, patch, delete |
 | Inventory | create, list, get, patch, deactivate, transactions (create + list) |
 | Dashboard | `GET /dashboard/metrics` |
+| Audit | `AuditLog` written on every mutation (infrastructure, not a resource) · `GET /audit-logs` (Admin, read-only) |
 
 Deferred to Phase 2+: health logs and treatments, processing, customers and sales, invoices,
-reports, alert settings and events, growth curves, audit log.
+reports, alert settings and events, growth curves.
+
+> **Corrected 2026-07-21:** "audit log" previously appeared in this deferred list. That was a bug — it
+> contradicted FR-13 (P0, with an acceptance criterion testing `GET /audit-logs`), BR-64/65, the
+> ROADMAP ("*placed at P0… cannot be retrofitted*"), and this document's own endpoint table. The audit
+> trail is Phase 1: `AuditLog` is written from the first mutation and `GET /audit-logs` ships Admin-only.
+> Per the authority order (BUSINESS_RULES over API.md), the audit requirement wins.
 
 Inventory is in Phase 1 per the **G-12** decision: item CRUD, thresholds, manual adjustment, and
 low-stock warnings ship in Phase 1; automatic deduction from daily logs, the full ledger with

@@ -42,6 +42,23 @@ export function ok<T>(
   return NextResponse.json(body, { status: opts.status ?? 200 });
 }
 
+export function okPaginated<T>(
+  data: T[],
+  page: { totalItems: number; currentPage: number; itemsPerPage: number },
+): NextResponse {
+  const totalPages = Math.max(1, Math.ceil(page.totalItems / page.itemsPerPage));
+  return NextResponse.json({
+    success: true,
+    data,
+    pagination: {
+      totalItems: page.totalItems,
+      totalPages,
+      currentPage: page.currentPage,
+      itemsPerPage: page.itemsPerPage,
+    },
+  });
+}
+
 export function fail(
   code: ErrorCode,
   message: string,

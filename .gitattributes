@@ -1,0 +1,17 @@
+# Normalize all text files to LF in the repository, regardless of each
+# contributor's core.autocrlf setting. This prevents line-ending churn when the
+# project is worked on from more than one machine. Binary files (detected by
+# `text=auto`) are left byte-for-byte untouched; the explicit rules below are
+# belt-and-suspenders for the common asset types.
+* text=auto eol=lf
+
+# Assets — never normalize.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.svg  text
+*.woff  binary
+*.woff2 binary

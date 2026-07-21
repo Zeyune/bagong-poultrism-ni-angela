@@ -196,11 +196,30 @@ provisions in-transaction, idempotent).
 
 ---
 
-## Step 4 · Audit trail (FR-13)
+## Step 4 · Audit trail (FR-13) ✅ **COMPLETE**
 **~2 days · build before the write endpoints**
 
-**Build** — a Prisma client extension writing `AuditLog` on every create/update/delete, capturing
-actor, entity, and before/after JSON. Plus `GET /api/v1/audit-logs`, Admin-only.
+> **Built and tested (2026-07-21).** 5 audit tests pass (17 total); verify-step1 still 11/11; all four
+> gates and `next build` green.
+>
+> **Implemented as database triggers, not a Prisma extension — a mid-build decision.** The plan said
+> "Prisma client extension," but that approach can't make "read before-image → write → insert audit"
+> atomic (the extension's `query()` doesn't bind to a manual transaction), and BR-64/65 demand atomic +
+> immutable. Effie chose Postgres triggers: `audit_row_change()` fires `AFTER INSERT/UPDATE/DELETE` on
+> each audited table, writing `AuditLog` in the same transaction from OLD/NEW — atomic, unbypassable,
+> and per-row (bulk writes audited for free). The Prisma extension shrank to one job: setting the
+> `app.user_id`/`app.farm_id` GUCs the trigger reads, from an `AsyncLocalStorage` actor context.
+>
+> **What surfaced:**
+> - **ALS + lazy Prisma promises** — the actor came through null at first: a `PrismaPromise` only runs
+>   when awaited, and `runWithActor` returned it unawaited, so the extension hook ran outside the
+>   context. Fixed by awaiting inside the `run()` callback.
+> - Verified the actor path works **through the pooler** (transaction mode holds one backend per tx),
+>   not just a direct connection.
+> - `withActor()` / `withAdminActor()` wrappers exist for the mutating routes of Steps 5–7.
+>
+> **Build** — a Prisma client extension writing `AuditLog` on every create/update/delete, capturing
+> actor, entity, and before/after JSON. Plus `GET /api/v1/audit-logs`, Admin-only.
 
 **Done when** every mutation produces an audit row automatically, with no per-endpoint code.
 

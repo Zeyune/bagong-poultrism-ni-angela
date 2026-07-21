@@ -18,6 +18,7 @@
 
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
+import { getActor } from "@/lib/audit/context";
 
 const connectionString = process.env.DATABASE_URL;
 
@@ -28,14 +29,60 @@ if (!connectionString) {
   );
 }
 
+// Write operations whose actor must be recorded by the audit trigger (FR-13).
+const WRITE_OPS = new Set([
+  "create",
+  "update",
+  "delete",
+  "upsert",
+  "createMany",
+  "updateMany",
+  "deleteMany",
+]);
+
 function createPrismaClient() {
   const adapter = new PrismaPg({ connectionString });
-  return new PrismaClient({
+  const base = new PrismaClient({
     adapter,
     log:
       process.env.NODE_ENV === "development"
         ? ["query", "warn", "error"]
         : ["error"],
+  });
+
+  // Audit actor bridge (FR-13). The AuditLog row itself is written by a database
+  // trigger (supabase/sql/040_audit_trigger.sql); this extension's only job is to
+  // hand that trigger the actor. For each write with an active request context, it
+  // sets the app.user_id / app.farm_id GUCs transaction-locally and runs the write
+  // in that same transaction, so the trigger firing inside it sees who acted.
+  //
+  // Writes with no actor context (seeds, tests, system tasks) pass straight through;
+  // the trigger still audits them, with a null actor.
+  return base.$extends({
+    query: {
+      $allModels: {
+        async $allOperations({ model, operation, args, query }) {
+          const actor = getActor();
+          if (!actor || !WRITE_OPS.has(operation)) {
+            return query(args);
+          }
+          const delegate = model.charAt(0).toLowerCase() + model.slice(1);
+          return base.$transaction(async (tx) => {
+            await tx.$queryRaw`select
+              set_config('app.user_id', ${actor.userId}, true),
+              set_config('app.farm_id', ${actor.farmId}, true)`;
+            // Re-issue the operation on the transaction client (unextended, so no
+            // re-entry into this hook) so the write and its trigger share the tx.
+            return (
+              tx as unknown as Record<
+                string,
+                Record<string, (a: unknown) => unknown>
+              >
+            )[delegate][operation](args);
+          });
+        },
+      },
+    },
   });
 }
 

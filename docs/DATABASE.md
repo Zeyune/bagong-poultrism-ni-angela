@@ -576,6 +576,15 @@ seeded per breed and referenced by `Flock.growthCurveId`.
 is no way to answer "who changed last month's feed number and when". Records actor, action, entity,
 and a JSON before/after diff.
 
+**Written by a database trigger, not application code** *(implemented 2026-07-21, Step 4)*. An
+`AFTER INSERT/UPDATE/DELETE` trigger (`audit_row_change()`, `supabase/sql/040_audit_trigger.sql`) on
+each audited table writes the `AuditLog` row in the same transaction as the change — atomic and
+unbypassable (BR-64/65), and firing per row so bulk writes are captured too. The actor travels in two
+transaction-local GUCs (`app.user_id`, `app.farm_id`) that the app's Prisma extension (`src/lib/db.ts`)
+sets from the request's authenticated user; writes with no request context are still audited, with a
+null actor. **Like the RLS lockdown, this must be re-run after any migration that adds a business
+table** *(G-71)* — Prisma does not manage it.
+
 ---
 
 ## Invariants
@@ -735,7 +744,10 @@ enum AuditAction {
 // ───────────────────────────── Identity ─────────────────────────────
 
 model User {
-  id          String     @id @default(cuid())
+  // uuid, not cuid like other entities (corrected 2026-07-21 to match the shipped
+  // schema/migration). The User PK is a uuid so it aligns with Supabase's auth
+  // convention; it is still distinct from authUserId.
+  id          String     @id @default(uuid()) @db.Uuid
   authUserId  String     @unique @db.Uuid // → auth.users.id (Supabase)
   email       String     @unique
   name        String

@@ -75,6 +75,128 @@ Every entry from here on carries a real `Time:` taken from the clock at the mome
 
 ## 2026-07-21
 
+### Build Step 4 — the audit trail (FR-13), as database triggers
+**Time:** 21:11 +08:00
+**Type:** Added · Decided
+**Files:** `supabase/sql/040_audit_trigger.sql`, `src/lib/audit/context.ts`, `src/lib/db.ts`, `src/lib/auth/with-actor.ts`, `src/lib/api/respond.ts`, `src/app/api/v1/audit-logs/route.ts`, `tests/step4-audit.integration.test.ts`, `test-exemptions.json`, `docs/DATABASE.md`, `docs/PHASE1_PLAN.md`
+**Related:** FR-13, BR-64, BR-65 · closes the FR-13 exemption · PHASE1_PLAN Step 4
+
+Every create/update/delete on a business table now writes an immutable `AuditLog` row with actor,
+action, entity, and a before/after JSON diff. `GET /api/v1/audit-logs` (Admin-only, filtered,
+paginated) reads them. 5 new tests (17 total); verify-step1 still 11/11; all gates and build green.
+
+**Decided — database triggers, not a Prisma extension** (Effie, mid-build). The plan specified a
+Prisma client extension, but that can't make "read before-image → write → insert audit" atomic: inside
+`$allOperations` the `query()` that runs the write doesn't bind to a manual transaction, so the audit
+insert can't be guaranteed to share the write's transaction. BR-64/65 require atomic **and** immutable,
+so a best-effort extension was not acceptable. **Chosen:** an `AFTER INSERT/UPDATE/DELETE` trigger
+(`audit_row_change()`) on each audited table, writing `AuditLog` in the same transaction from OLD/NEW.
+Advantages over the extension: atomic by construction, unbypassable (even raw SQL is audited), and
+per-row — so `updateMany`/`deleteMany` are captured for free, which the extension approach could not do.
+Precedent already existed in the codebase (the BR-10 provisioning trigger). **Rejected:** Prisma
+extension with an interactive transaction (more app code, only audits Prisma writes) and best-effort
+(violates BR-64's "MUST").
+
+**Actor passing.** The trigger reads two transaction-local GUCs — `app.user_id`, `app.farm_id` — that a
+thin Prisma extension (`src/lib/db.ts`) sets from an `AsyncLocalStorage` actor context, established by
+`withActor()`/`withAdminActor()` at the top of a mutating request. Writes with no context (seeds, tests)
+are still audited, with a null actor. Transaction-local is required because the pooler discards session
+state across statements (I-15) — but a GUC set inside an interactive transaction is visible to the
+trigger firing in that same transaction, which is exactly the shape the extension creates.
+
+**Bug found and fixed — ALS vs lazy Prisma promises.** The actor initially came through as null. A
+`PrismaPromise` schedules no work until awaited; `runWithActor` returned it unawaited, so the write —
+and the extension hook — executed *after* `run()` had exited the `AsyncLocalStorage` context, and
+`getActor()` saw nothing. The direct-SQL probe (GUC set manually) proved the trigger itself was
+correct, isolating the fault to the app layer. Fixed by awaiting `fn()` inside the `run()` callback.
+Caught because the test asserts the actual actor id against a real user, not a mock.
+
+**Verified through the pooler.** The Step 4 tests ran against `DATABASE_URL` = the local Supavisor
+pooler (54329), confirming the interactive-transaction + `set_config` actor path works on production's
+transaction-mode topology, not merely a direct connection.
+
+**Operational note (G-71):** `040_audit_trigger.sql` attaches triggers to a curated list of Phase 1
+business tables and, like the RLS lockdown, must be re-run after any migration that adds a business
+table. `npm run db:sql` and the CI database job already apply it after every migration.
+
+**Not verified:** no mutating HTTP route exists yet (Steps 5–7), so `withActor` has been exercised via
+`runWithActor` in tests but not yet through a live endpoint. The audit-logs date filter hardcodes the
+Asia/Manila +08:00 offset (exact for this single farm; a multi-timezone future resolves it from
+`Farm.timezone`).
+
+---
+
+### Resolve the User.id uuid-vs-cuid disagreement — DATABASE.md aligned to the shipped uuid
+**Time:** 20:44 +08:00
+**Type:** Decided · Fixed
+**Files:** `docs/DATABASE.md`
+**Related:** precedes Step 4 · relates to the 20:20 "stale Prisma client" note · authority order (DATABASE.md)
+
+**Decision (Effie, 2026-07-21):** align the document to the implementation. `docs/DATABASE.md` now
+defines `User.id` as `@default(uuid()) @db.Uuid`, matching `schema.prisma`, the applied migration, and
+the live column.
+
+`DATABASE.md` line 738 defines `User.id` as `@default(cuid())`; `prisma/schema.prisma` line 109 defines
+it as `@default(uuid()) @db.Uuid`. The applied migration and the live database column are **uuid** — so
+schema, migration, client, and the Step 3 code are all internally consistent on uuid; DATABASE.md is
+the outlier. This is the same divergence whose symptom appeared on 2026-07-21 20:20 as a "stale client"
+(the pre-regeneration client emitted a cuid into the uuid column).
+
+**Why logged, not fixed:** the project's authority order puts DATABASE.md above the implementation, which
+would argue the *schema* is wrong and `User.id` should be cuid. But the implementation has shipped on
+uuid (Step 3, the smoke test, the migration), and reversing a primary-key type touches the migration,
+`AuditLog.userId`, and every back-relation. Which way to resolve — align DATABASE.md to the implemented
+uuid, or change the schema to cuid — is a structural call for Effie, not one to make silently.
+
+**Why this direction:** the implementation has already shipped on uuid (Step 3, the smoke test, the
+migration), so aligning the doc is zero code/DB churn. **Rejected:** changing the schema to cuid — it
+would alter a primary key, cascade to `AuditLog.userId` and every back-relation, and force re-testing
+Step 3, all for a value that is opaque to callers anyway. The authority order nominally favours the
+document, but here the document was simply stale, not describing a deliberate structure the code had
+violated.
+
+---
+
+### Correct API.md — the audit log is Phase 1, not deferred
+**Time:** 20:40 +08:00
+**Type:** Fixed
+**Files:** `docs/API.md`
+**Related:** FR-13 · BR-64, BR-65 · ROADMAP P0 · precedes Step 4
+
+API.md's "Phase 1 Surface" listed "audit log" under *Deferred to Phase 2+*, while its own endpoint
+table documents `GET /audit-logs` as a live Admin endpoint. Removed audit from the deferred list, added
+an Audit row to the Phase 1 Surface table, and left a dated correction note.
+
+**Why:** found while starting Step 4. The deferral contradicted five places at once — FR-13 (P0, with an
+acceptance criterion that tests `GET /audit-logs`), BR-64/65, the ROADMAP's explicit "placed at P0
+because it cannot be retrofitted," `test-exemptions.json` ("FR-13 — Step 4"), and API.md's own endpoint
+table. Per the authority order (BUSINESS_RULES over API.md) the audit requirement wins, so the
+resolution needed no judgment call. **Rejected alternative:** reading the deferral as applying only to
+the read endpoint while writing ships in Phase 1 — untenable, because FR-13's acceptance criteria test
+the endpoint in Phase 1 and PHASE1_PLAN Step 4 builds it. Surfaced to Effie rather than resolved
+silently, per the standing rule on cross-document contradictions.
+
+---
+
+### Add .gitattributes to normalize line endings to LF
+**Time:** 20:36 +08:00
+**Type:** Added
+**Files:** `.gitattributes`
+**Related:** —
+
+`* text=auto eol=lf`, with explicit binary rules for common assets. The repo already stored LF (via
+`core.autocrlf=true` on this machine), so this changes nothing on disk today; it makes the behaviour
+deterministic across machines rather than dependent on each contributor's Git config.
+
+**Why:** requested. Committing Step 3 surfaced a wall of "LF will be replaced by CRLF" warnings — the
+harmless symptom of relying on a per-machine setting instead of a repo-level rule. Low value while the
+project is single-contributor, but the fix is one file and removes a class of future line-ending churn.
+
+**To apply across existing files** (hand-off — I do not run git): `git add --renormalize .` then commit
+alongside this file.
+
+---
+
 ### Verify Step 3 end-to-end — the cookie-session HTTP round trip the unit suite can't reach
 **Time:** 20:31 +08:00
 **Type:** Added

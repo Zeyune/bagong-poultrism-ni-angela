@@ -41,8 +41,7 @@
     "FR-08": "alerts — P1, not in this phase",
     "FR-09": "sales — P2, not in this phase",
     "FR-11": "processing — P1, not in this phase",
-    "FR-12": "withdrawal enforcement — P1, not in this phase",
-    "FR-13": "audit trail — Step 4"
+    "FR-12": "withdrawal enforcement — P1, not in this phase"
   },
 
   "security": {

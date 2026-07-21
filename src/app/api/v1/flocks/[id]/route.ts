@@ -39,6 +39,38 @@ export async function PATCH(request: Request, context: Ctx) {
       if (!existing) return fail("NOT_FOUND", "Flock not found.", { status: 404 });
 
       const d = parsed.data;
+
+      // Same referential guards as create: growth curves are broiler-only, and a
+      // referenced feed item / growth curve must exist in this farm (422, not a
+      // raw FK 500). type is immutable, so `existing.type` is authoritative.
+      if (d.growthCurveId && existing.type !== "BROILER") {
+        return fail(
+          "UNPROCESSABLE",
+          "A growth curve applies to broiler flocks only.",
+          { status: 422 },
+        );
+      }
+      if (d.defaultFeedItemId) {
+        const feed = await db.inventoryItem.findFirst({
+          where: { id: d.defaultFeedItemId, farmId: admin.farmId, type: "FEED" },
+        });
+        if (!feed) {
+          return fail("UNPROCESSABLE", "The selected feed item was not found.", {
+            status: 422,
+          });
+        }
+      }
+      if (d.growthCurveId) {
+        const gc = await db.growthCurve.findFirst({
+          where: { id: d.growthCurveId, farmId: admin.farmId },
+        });
+        if (!gc) {
+          return fail("UNPROCESSABLE", "The selected growth curve was not found.", {
+            status: 422,
+          });
+        }
+      }
+
       try {
         const flock = await db.flock.update({
           where: { id },

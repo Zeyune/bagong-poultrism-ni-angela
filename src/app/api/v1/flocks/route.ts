@@ -19,9 +19,43 @@ export async function POST(request: Request) {
       if (!parsed.success) return validationFail(parsed.error);
       const d = parsed.data;
 
-      // Broilers default to a 45-day cycle (BR-04); layers have none.
+      // Growth curves apply to broilers only (USER_FLOWS §3.1).
+      if (d.growthCurveId && d.type !== "BROILER") {
+        return fail(
+          "UNPROCESSABLE",
+          "A growth curve applies to broiler flocks only.",
+          { status: 422 },
+        );
+      }
+      // Referenced feed item / growth curve must exist in this farm — a clear 422
+      // rather than a raw foreign-key 500. The form's dropdowns only offer valid
+      // ones; this is the backstop.
+      if (d.defaultFeedItemId) {
+        const feed = await db.inventoryItem.findFirst({
+          where: { id: d.defaultFeedItemId, farmId: admin.farmId, type: "FEED" },
+        });
+        if (!feed) {
+          return fail("UNPROCESSABLE", "The selected feed item was not found.", {
+            status: 422,
+          });
+        }
+      }
+      if (d.growthCurveId) {
+        const gc = await db.growthCurve.findFirst({
+          where: { id: d.growthCurveId, farmId: admin.farmId },
+        });
+        if (!gc) {
+          return fail("UNPROCESSABLE", "The selected growth curve was not found.", {
+            status: 422,
+          });
+        }
+      }
+
+      // Broilers default to a 45-day cycle (BR-04); layers have neither cycle nor
+      // growth curve.
       const cycleLengthDays =
         d.type === "BROILER" ? (d.cycleLengthDays ?? 45) : null;
+      const growthCurveId = d.type === "BROILER" ? (d.growthCurveId ?? null) : null;
 
       try {
         const flock = await db.flock.create({
@@ -35,7 +69,7 @@ export async function POST(request: Request) {
             startDate: new Date(`${d.startDate}T00:00:00Z`),
             cycleLengthDays,
             defaultFeedItemId: d.defaultFeedItemId ?? null,
-            growthCurveId: d.growthCurveId ?? null,
+            growthCurveId,
             status: "ACTIVE",
           },
         });

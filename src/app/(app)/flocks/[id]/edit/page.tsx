@@ -18,8 +18,26 @@ export default async function EditFlockPage({
   if (user.role !== "ADMIN") redirect("/flocks");
 
   const { id } = await params;
-  const row = await db.flock.findFirst({ where: { id, farmId: user.farmId } });
+  const [row, feedItems, growthCurves] = await Promise.all([
+    db.flock.findFirst({ where: { id, farmId: user.farmId } }),
+    db.inventoryItem.findMany({
+      where: { farmId: user.farmId, type: "FEED", isActive: true },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    }),
+    db.growthCurve.findMany({
+      where: { farmId: user.farmId },
+      select: { id: true, name: true, breed: true },
+      orderBy: { name: "asc" },
+    }),
+  ]);
   if (!row) notFound();
 
-  return <EditFlockForm flock={serializeFlock(row)} />;
+  return (
+    <EditFlockForm
+      flock={serializeFlock(row)}
+      feedItems={feedItems}
+      growthCurves={growthCurves}
+    />
+  );
 }

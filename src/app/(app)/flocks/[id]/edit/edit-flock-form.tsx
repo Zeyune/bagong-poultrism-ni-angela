@@ -7,18 +7,30 @@ import { Button } from "@/components/ui/button";
 import { Field, inputClass } from "@/components/ui/field";
 
 type FieldErrors = Record<string, string>;
+type FeedItem = { id: string; name: string };
+type GrowthCurve = { id: string; name: string; breed: string };
 
-// Only the PATCH-editable fields appear (name, breed, cycle). type and
-// currentCount are immutable and absent by design (BR-02, BR-13).
+// Only the PATCH-editable fields appear (name, breed, cycle, feed item, growth
+// curve). type and currentCount are immutable and absent by design (BR-02, BR-13).
 type FlockView = {
   id: string;
   name: string;
   type: "LAYER" | "BROILER";
   breed: string | null;
   cycleLengthDays: number | null;
+  defaultFeedItemId: string | null;
+  growthCurveId: string | null;
 };
 
-export function EditFlockForm({ flock }: { flock: FlockView }) {
+export function EditFlockForm({
+  flock,
+  feedItems,
+  growthCurves,
+}: {
+  flock: FlockView;
+  feedItems: FeedItem[];
+  growthCurves: GrowthCurve[];
+}) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -34,13 +46,17 @@ export function EditFlockForm({ flock }: { flock: FlockView }) {
     const name = String(form.get("name") ?? "").trim();
     const breed = String(form.get("breed") ?? "").trim();
     const cycleRaw = String(form.get("cycleLengthDays") ?? "").trim();
+    const feedId = String(form.get("defaultFeedItemId") ?? "");
+    const curveId = String(form.get("growthCurveId") ?? "");
 
-    // Send breed/cycle as null when cleared, so the field can be unset (the PATCH
-    // schema accepts null); omit nothing the user left as-is.
+    // Empty selections/inputs send null, so a field can be cleared (the PATCH
+    // schema accepts null).
     const body: Record<string, unknown> = { name };
     body.breed = breed ? breed : null;
+    body.defaultFeedItemId = feedId ? feedId : null;
     if (flock.type === "BROILER") {
       body.cycleLengthDays = cycleRaw ? Number(cycleRaw) : null;
+      body.growthCurveId = curveId ? curveId : null;
     }
 
     const res = await fetch(`/api/v1/flocks/${flock.id}`, {
@@ -113,23 +129,77 @@ export function EditFlockForm({ flock }: { flock: FlockView }) {
           />
         </Field>
 
-        {flock.type === "BROILER" && (
-          <Field
-            id="cycleLengthDays"
-            label="Cycle length (days)"
-            hint="Leave blank to clear."
-            error={errors.cycleLengthDays}
+        <Field
+          id="defaultFeedItemId"
+          label="Default feed item"
+          error={errors.defaultFeedItemId}
+          hint={
+            feedItems.length === 0
+              ? "No feed items exist yet — add one in Inventory to track feed consumption."
+              : undefined
+          }
+        >
+          <select
+            id="defaultFeedItemId"
+            name="defaultFeedItemId"
+            defaultValue={flock.defaultFeedItemId ?? ""}
+            disabled={feedItems.length === 0}
+            className={inputClass}
           >
-            <input
+            <option value="">None</option>
+            {feedItems.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        {flock.type === "BROILER" && (
+          <>
+            <Field
               id="cycleLengthDays"
-              name="cycleLengthDays"
-              type="number"
-              min={1}
-              inputMode="numeric"
-              defaultValue={flock.cycleLengthDays ?? ""}
-              className={inputClass}
-            />
-          </Field>
+              label="Cycle length (days)"
+              hint="Leave blank to clear."
+              error={errors.cycleLengthDays}
+            >
+              <input
+                id="cycleLengthDays"
+                name="cycleLengthDays"
+                type="number"
+                min={1}
+                inputMode="numeric"
+                defaultValue={flock.cycleLengthDays ?? ""}
+                className={inputClass}
+              />
+            </Field>
+
+            <Field
+              id="growthCurveId"
+              label="Growth curve"
+              error={errors.growthCurveId}
+              hint={
+                growthCurves.length === 0
+                  ? "No growth curves exist yet — the growth report will be unavailable."
+                  : undefined
+              }
+            >
+              <select
+                id="growthCurveId"
+                name="growthCurveId"
+                defaultValue={flock.growthCurveId ?? ""}
+                disabled={growthCurves.length === 0}
+                className={inputClass}
+              >
+                <option value="">None</option>
+                {growthCurves.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.breed})
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </>
         )}
 
         <div className="flex gap-3 pt-2">

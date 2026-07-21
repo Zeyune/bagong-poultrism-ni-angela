@@ -1,6 +1,11 @@
 import { z } from "zod";
+import { farmTodayDateString } from "@/lib/time";
 
 const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD.");
+
+// YYYY-MM-DD compares lexicographically as a date, so a string <= today is
+// today-or-past in farm-local time.
+const notFuture = (s: string) => s <= farmTodayDateString();
 
 // POST /flocks. currentCount is deliberately absent — it is system-maintained
 // (BR-13), set to initialCount at creation. type is set here and never again (BR-02).
@@ -9,7 +14,8 @@ export const createFlockSchema = z.object({
   type: z.enum(["LAYER", "BROILER"]),
   breed: z.string().trim().min(1).optional(),
   initialCount: z.number().int().positive("initialCount must be greater than 0."),
-  startDate: DATE,
+  // Start date cannot be in the future (USER_FLOWS §3.1).
+  startDate: DATE.refine(notFuture, "Start date cannot be in the future."),
   // Broilers default to 45 (BR-04) if omitted; layers carry null.
   cycleLengthDays: z.number().int().positive().nullable().optional(),
   defaultFeedItemId: z.string().min(1).nullable().optional(),

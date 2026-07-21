@@ -75,6 +75,92 @@ Every entry from here on carries a real `Time:` taken from the clock at the mome
 
 ## 2026-07-21
 
+### Close the flock create/edit field gaps and resolve the tagging-toggle inconsistency
+**Time:** 22:52 +08:00
+**Type:** Added · Fixed · Decided
+**Files:** `src/lib/time.ts`, `src/lib/flocks/lifecycle.ts`, `src/lib/validation/flock.ts`, `src/app/api/v1/flocks/route.ts`, `src/app/api/v1/flocks/[id]/route.ts`, `src/app/(app)/flocks/new/{page,new-flock-form}.tsx`, `src/app/(app)/flocks/[id]/edit/{page,edit-flock-form}.tsx`, `tests/step5-flocks.integration.test.ts`, `docs/USER_FLOWS.md`, `docs/FEEDBACK.md`
+**Related:** USER_FLOWS.md §3.1, FR-01, BR-02, BR-04, BR-07, BR-24, G-21, G-45 · follows the 22:42 gap audit
+
+Fixed the three real gaps Effie found, plus the doc inconsistency:
+
+1. **Default feed item** — a dropdown of the farm's active `FEED` items, on both create and edit
+   forms; empty-state hint when none exist (BR-24). The route validates the id belongs to the farm
+   (422, not a raw FK 500).
+2. **Growth curve (broiler only)** — a dropdown of the farm's growth curves, shown for broilers; the
+   route rejects a growth curve on a layer (422) and validates existence. Options are read directly
+   in the server pages (no inventory API until Step 7).
+3. **Future start date** — `createFlockSchema` now rejects a start date after farm-local today (400,
+   USER_FLOWS §3.1). Added a shared `src/lib/time.ts` for farm-local "today" and pointed `lifecycle`
+   at it.
+4. **Tagging-toggle inconsistency — decided.** USER_FLOWS §3.1 listed an "enable individual tagging"
+   form field with no backing column. **Removed it from the flow** rather than adding a
+   `Flock.taggingEnabled` column: BR-07 makes tagging additive and optional, and the authority order
+   (DATABASE/BUSINESS_RULES over USER_FLOWS) says the flow aligns to the model. Correction noted in
+   USER_FLOWS §3.3; the rejected alternative (a schema flag) is recorded there.
+
+**Why:** these were genuine Step 5 completeness gaps against the spec — the schema and API already
+supported `defaultFeedItemId`/`growthCurveId`, but the UI never exposed them, and future start dates
+were silently accepted. Found because Effie read USER_FLOWS.md and cross-checked; the fix closes the
+create form to §3.1.
+
+**Verified:** 31 Vitest tests (4 new — future-date 400, growth-curve-on-layer 422, bad-feed-item 422,
+full-broiler 201); all gates and build green; and over HTTP the create form renders the new dropdowns
+with the seeded feed item and rejects a future date. `edit` gained the same two fields for parity —
+not in §3.1's list, but the PATCH API supports them and management is incomplete without them.
+
+**Not done:** the "no feed item / no growth curve" cases are surfaced as form hints, not as API
+`warnings[]` on the create response (BR-24's warning path); and bird edit/remove (§3.3) remain
+unbuilt (the birds API has no PATCH/DELETE). Both noted as follow-ups, not silently skipped.
+
+---
+
+### Add FEEDBACK.md for Effie's opinions; record the create-form field gap
+**Time:** 22:40 +08:00
+**Type:** Added
+**Files:** `docs/FEEDBACK.md`
+**Related:** USER_FLOWS.md §3.1, FR-01
+
+Created `docs/FEEDBACK.md` — a dated log of Effie's own impressions and design instincts, separate
+from the specs and this changelog. Seeded with two entries from today: the "feels like a toy, not a
+professional system" impression, and the observation that the create-flock form was missing fields.
+
+**Why:** requested. Effie's reactions ("this feels off", design hunches) are signal that gets lost
+between sessions if only my structured docs are kept. A dedicated file preserves them in their own
+voice; the changelog stays for changes-with-reasoning.
+
+**The field gap is real** — see the next entry, which catalogues what USER_FLOWS.md §3.1 specifies
+versus what the create form and API currently do.
+
+---
+
+### Cross-check the flock UI against USER_FLOWS.md §3 — real gaps found (not yet fixed)
+**Time:** 22:42 +08:00
+**Type:** Decided
+**Files:** — *(investigation; no code changed yet)*
+**Related:** USER_FLOWS.md §3.1, FR-01, BR-02, BR-24, G-21, G-45
+
+Effie flagged that the create-flock form seemed to lack fields. Checked USER_FLOWS.md §3.1 against the
+built form (`new-flock-form.tsx`), the API (`createFlockSchema`), and the `Flock` model. Findings:
+
+1. **Missing form field — default feed item.** §3.1 lists it; FR-01 says the system MUST support
+   `defaultFeedItemId`. The schema and API already accept it — the **UI form just doesn't expose it.**
+   Real gap. (Warning path when no feed items exist — BR-24 — is also unbuilt.)
+2. **Missing form field — growth curve (broiler only).** Same story: `growthCurveId` is in the schema
+   and API, absent from the form. §3.1 and the broiler-growth report (G-21) depend on it.
+3. **Missing validation — future start date.** §3.1 says a future start date is a `400`; the API
+   accepts any well-formed date. Gap in `createFlockSchema` (and the form).
+4. **Doc inconsistency — "enable individual tagging."** §3.1 lists this as a form field, but the
+   `Flock` model has **no such flag** (BR-07: tagging is additive — you simply add `Bird` rows or
+   not). The form field has nothing to persist to. To be resolved as a spec question, not built blind.
+5. **Bird edit/remove (§3.3)** — the flow says add/view/edit/remove; only add + view are built, and
+   the birds API has no PATCH/DELETE. Out of the current surface; noted.
+
+**Decision: report before building.** Items 1–3 are genuine Step 5 completeness gaps and worth fixing;
+item 4 needs a spec call (add a flag, or drop the form field); item 5 is a scope question. Not
+implemented yet — awaiting Effie's go-ahead, per the scope-discipline correction earlier today.
+
+---
+
 ### Fix the audit trail silently losing its actor over HTTP (FR-13)
 **Time:** 22:26 +08:00
 **Type:** Fixed

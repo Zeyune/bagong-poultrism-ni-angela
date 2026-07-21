@@ -7,8 +7,18 @@ import { Button } from "@/components/ui/button";
 import { Field, inputClass } from "@/components/ui/field";
 
 type FieldErrors = Record<string, string>;
+type FeedItem = { id: string; name: string };
+type GrowthCurve = { id: string; name: string; breed: string };
 
-export function NewFlockForm() {
+export function NewFlockForm({
+  feedItems,
+  growthCurves,
+  today,
+}: {
+  feedItems: FeedItem[];
+  growthCurves: GrowthCurve[];
+  today: string;
+}) {
   const router = useRouter();
   const [type, setType] = useState<"LAYER" | "BROILER">("LAYER");
   const [pending, setPending] = useState(false);
@@ -24,6 +34,8 @@ export function NewFlockForm() {
     const form = new FormData(e.currentTarget);
     const cycleRaw = String(form.get("cycleLengthDays") ?? "").trim();
     const breedRaw = String(form.get("breed") ?? "").trim();
+    const feedId = String(form.get("defaultFeedItemId") ?? "");
+    const curveId = String(form.get("growthCurveId") ?? "");
 
     const body: Record<string, unknown> = {
       name: String(form.get("name") ?? "").trim(),
@@ -32,7 +44,11 @@ export function NewFlockForm() {
       startDate: String(form.get("startDate") ?? ""),
     };
     if (breedRaw) body.breed = breedRaw;
-    if (type === "BROILER" && cycleRaw) body.cycleLengthDays = Number(cycleRaw);
+    if (feedId) body.defaultFeedItemId = feedId;
+    if (type === "BROILER") {
+      if (cycleRaw) body.cycleLengthDays = Number(cycleRaw);
+      if (curveId) body.growthCurveId = curveId;
+    }
 
     const res = await fetch("/api/v1/flocks", {
       method: "POST",
@@ -89,7 +105,13 @@ export function NewFlockForm() {
           />
         </Field>
 
-        <Field id="type" label="Type" required error={errors.type}>
+        <Field
+          id="type"
+          label="Type"
+          required
+          error={errors.type}
+          hint="Type is permanent — it can’t be changed after the flock is created."
+        >
           <select
             id="type"
             name="type"
@@ -132,27 +154,84 @@ export function NewFlockForm() {
             name="startDate"
             type="date"
             required
+            max={today}
             aria-describedby={errors.startDate ? "startDate-error" : undefined}
             className={inputClass}
           />
         </Field>
 
-        {type === "BROILER" && (
-          <Field
-            id="cycleLengthDays"
-            label="Cycle length (days)"
-            hint="Defaults to 45 if left blank."
-            error={errors.cycleLengthDays}
+        {/* Default feed item — feed consumption deducts from it (BR-24). */}
+        <Field
+          id="defaultFeedItemId"
+          label="Default feed item"
+          error={errors.defaultFeedItemId}
+          hint={
+            feedItems.length === 0
+              ? "No feed items exist yet — feed consumption won’t be tracked until one is added in Inventory."
+              : undefined
+          }
+        >
+          <select
+            id="defaultFeedItemId"
+            name="defaultFeedItemId"
+            defaultValue=""
+            disabled={feedItems.length === 0}
+            className={inputClass}
           >
-            <input
+            <option value="">None</option>
+            {feedItems.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        {type === "BROILER" && (
+          <>
+            <Field
               id="cycleLengthDays"
-              name="cycleLengthDays"
-              type="number"
-              min={1}
-              inputMode="numeric"
-              className={inputClass}
-            />
-          </Field>
+              label="Cycle length (days)"
+              hint="Defaults to 45 if left blank."
+              error={errors.cycleLengthDays}
+            >
+              <input
+                id="cycleLengthDays"
+                name="cycleLengthDays"
+                type="number"
+                min={1}
+                inputMode="numeric"
+                className={inputClass}
+              />
+            </Field>
+
+            {/* Growth curve — broiler only; the growth report needs it (G-21). */}
+            <Field
+              id="growthCurveId"
+              label="Growth curve"
+              error={errors.growthCurveId}
+              hint={
+                growthCurves.length === 0
+                  ? "No growth curves exist yet — the growth report will be unavailable for this flock."
+                  : undefined
+              }
+            >
+              <select
+                id="growthCurveId"
+                name="growthCurveId"
+                defaultValue=""
+                disabled={growthCurves.length === 0}
+                className={inputClass}
+              >
+                <option value="">None</option>
+                {growthCurves.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.breed})
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </>
         )}
 
         <div className="flex gap-3 pt-2">

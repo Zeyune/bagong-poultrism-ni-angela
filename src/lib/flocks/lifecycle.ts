@@ -1,4 +1,5 @@
 import type { FlockStatus } from "@prisma/client";
+import { farmTodayUtcMidnight } from "@/lib/time";
 
 // The flock state machine (BUSINESS_RULES §3.1). Only transitions reachable via
 // the status endpoint are listed. PROCESSED is entered by a ProcessingEvent
@@ -12,19 +13,6 @@ export const ALLOWED_TRANSITIONS: Record<FlockStatus, FlockStatus[]> = {
 
 export function canTransition(from: FlockStatus, to: FlockStatus): boolean {
   return ALLOWED_TRANSITIONS[from]?.includes(to) ?? false;
-}
-
-// Today's calendar date in the farm timezone, as a UTC-midnight Date so it can be
-// differenced against a @db.Date (also stored at UTC midnight). Asia/Manila is a
-// fixed +08:00 offset; a multi-timezone future would take the tz as a parameter.
-function farmTodayUtcMidnight(timeZone = "Asia/Manila"): Date {
-  const ymd = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-  return new Date(`${ymd}T00:00:00Z`);
 }
 
 // days-to-processing = cycleLengthDays − days elapsed since startDate (BR metric).

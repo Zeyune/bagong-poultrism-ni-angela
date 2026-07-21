@@ -225,6 +225,72 @@ describe("Flocks — FR-01", () => {
     authState.sub = null;
   });
 
+  it("USER_FLOWS §3.1: a future start date is rejected (400)", async () => {
+    authState.sub = adminSub;
+    const res = await flocks.POST(
+      req("http://x", "POST", {
+        name: `Future ${randomUUID()}`,
+        type: "LAYER",
+        initialCount: 10,
+        startDate: "2999-01-01",
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("a growth curve on a LAYER flock is rejected (422)", async () => {
+    const gc = await db.growthCurve.findFirstOrThrow({ where: { farmId: FARM } });
+    authState.sub = adminSub;
+    const res = await flocks.POST(
+      req("http://x", "POST", {
+        name: `LayerGC ${randomUUID()}`,
+        type: "LAYER",
+        initialCount: 10,
+        startDate: "2026-07-01",
+        growthCurveId: gc.id,
+      }),
+    );
+    expect(res.status).toBe(422);
+  });
+
+  it("a non-existent feed item is rejected (422)", async () => {
+    authState.sub = adminSub;
+    const res = await flocks.POST(
+      req("http://x", "POST", {
+        name: `BadFeed ${randomUUID()}`,
+        type: "LAYER",
+        initialCount: 10,
+        startDate: "2026-07-01",
+        defaultFeedItemId: "inv_does_not_exist000000",
+      }),
+    );
+    expect(res.status).toBe(422);
+  });
+
+  it("FR-01: a broiler with a valid feed item and growth curve is created (201)", async () => {
+    const feed = await db.inventoryItem.findFirstOrThrow({
+      where: { farmId: FARM, type: "FEED" },
+    });
+    const gc = await db.growthCurve.findFirstOrThrow({ where: { farmId: FARM } });
+    authState.sub = adminSub;
+    const res = await flocks.POST(
+      req("http://x", "POST", {
+        name: `FullBroiler ${randomUUID()}`,
+        type: "BROILER",
+        initialCount: 20,
+        startDate: "2026-07-01",
+        defaultFeedItemId: feed.id,
+        growthCurveId: gc.id,
+      }),
+    );
+    const json = await res.json();
+    if (res.status === 201) flockIds.push(json.data.id);
+    expect(res.status).toBe(201);
+    expect(json.data.defaultFeedItemId).toBe(feed.id);
+    expect(json.data.growthCurveId).toBe(gc.id);
+  });
+
   it("FR-13 (live endpoint): creating a flock writes an audit row attributed to the admin", async () => {
     const admin = await db.user.findFirstOrThrow({ where: { authUserId: adminSub } });
     const { json } = await createFlock({

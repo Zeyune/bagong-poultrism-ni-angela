@@ -92,7 +92,7 @@ Before data exists, each screen shows what to do rather than an empty table:
 
 1. Flock Management → **Add Flock**.
 2. Form: name, type (`LAYER`/`BROILER`), breed, initial bird count, start date, default feed item,
-   growth curve (broiler only), enable individual tagging.
+   growth curve (broiler only).
 3. `POST /flocks` → `currentCount` initialises to `initialCount`.
 4. Flock appears in the list; user is offered "Log today's data".
 
@@ -124,6 +124,13 @@ Add, view, edit, and remove tagged birds within a flock. Tags are unique per flo
 
 > **Known limitation** *(G-45)*: mortality is recorded at flock level, so a bird's `status` never
 > changes automatically. Tagged birds are useful for health history, not for headcount.
+
+> **Correction (2026-07-21).** §3.1's Add-Flock form previously listed an **"enable individual
+> tagging"** field. Removed: the `Flock` model has no such flag, and BR-07 defines tagging as purely
+> **additive and optional** — a flock has tagged birds if birds have been added to it, nothing to
+> enable. The alternative (adding a `Flock.taggingEnabled` column) was rejected as schema churn for a
+> cosmetic gate on an already-optional, inert feature (G-45). Tagging is always available; the flock
+> detail screen simply offers "Add bird".
 
 ---
 

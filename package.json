@@ -29,6 +29,7 @@
     "verify:step1": "node scripts/verify-step1.mjs",
     "verify:pooler": "node scripts/verify-pooler.mjs",
     "check:env": "node scripts/check-env.mjs",
+    "dev:user": "node scripts/create-dev-user.mjs",
     "test:ci": "npm run typecheck && npm run lint && npm run test && npm run test:gates"
   },
   "dependencies": {

@@ -75,6 +75,98 @@ Every entry from here on carries a real `Time:` taken from the clock at the mome
 
 ## 2026-07-21
 
+### Fix the audit trail silently losing its actor over HTTP (FR-13)
+**Time:** 22:26 +08:00
+**Type:** Fixed
+**Files:** `src/lib/audit/context.ts`
+**Related:** FR-13, BR-64 · Step 4 · found via manual browser testing
+
+Pinned the audit `AsyncLocalStorage` to `globalThis` (the pattern `db.ts` already uses for the Prisma
+client). Without it, every `AuditLog` row written over HTTP carried a **null `userId`** — the trail
+recorded *that* something changed but not *who* changed it — and writes to farm-less audited tables
+(`Bird`) failed outright with a null-constraint error, because the trigger had no `farmId` GUC to fall
+back to either.
+
+**Root cause.** Under Next's bundler the context module was instantiated more than once, so
+`withActor()` set the actor in one `AsyncLocalStorage` instance while the db extension's `getActor()`
+read a different, empty one. The write then ran with no actor context, and the trigger fired with
+both GUCs unset. Flock writes *appeared* fine only because the trigger reads `farmId` from the flock
+row as a fallback — masking that `userId` was also being lost.
+
+**Why the tests didn't catch it.** The Step 5 suite asserts `AuditLog.userId === admin.id` and passes
+— but Vitest is a single module graph, so the storage is never duplicated there. **The bug only exists
+in the Next runtime, and only real HTTP surfaces it.** It was found because Effie clicked "Add bird"
+in the browser and hit a 500. Verified the fix over HTTP: a bird created through the running app now
+returns 201 and its audit row carries a non-null `userId`.
+
+**Honesty note.** The Step 4 and Step 5-API entries claimed audit attribution worked, on the strength
+of the Vitest assertion. That was true in Vitest and false in the real app. This entry supersedes that
+confidence. **Verification gap that remains:** no automated test catches this — it needs an HTTP-level
+check against a running server. Recorded as an open testing risk rather than papered over.
+
+---
+
+### Build the Step 5 Flocks UI (FR-01) — shell, list, detail, create, edit, status, birds
+**Time:** 22:20 +08:00
+**Type:** Added
+**Files:** `src/app/globals.css`, `src/app/layout.tsx`, `src/app/(app)/layout.tsx`, `src/app/(app)/page.tsx`, `src/app/(app)/flocks/{page,loading}.tsx`, `src/app/(app)/flocks/new/{page,new-flock-form}.tsx`, `src/app/(app)/flocks/[id]/{page,status-actions,add-bird}.tsx`, `src/app/(app)/flocks/[id]/edit/{page,edit-flock-form}.tsx`, `src/components/ui/{button,status-badge,field}.tsx`, `supabase/sql/030_seed_reference.sql`, `scripts/create-dev-user.mjs`, `package.json`, `docs/PHASE1_PLAN.md`
+**Related:** FR-01, DESIGN.md · deleted `src/app/page.tsx` (moved into the (app) group)
+
+The Flocks UI: an authenticated app shell, the flock list (status/type filters, first-run and
+filtered empty states, loading skeletons), detail, create form, edit form, the consequence-naming
+status-change confirmation (a native `<dialog>`), and inline bird tagging. Built hand-rolled on the
+DESIGN.md tokens per that decision; reads are Server Components, writes POST/PATCH to the Step 5 API.
+
+- **Design token layer established** (`globals.css`) — DESIGN.md §2/§4/§5 verified-contrast colours
+  (light + dark), Montserrat/Lato, radius. Nothing existed before; the app used scaffold defaults.
+- **Two BR-03 flocks seeded** (one layer, one broiler) in `030` — before the audit trigger attaches,
+  so seed data is not audited as a user action.
+- **`npm run dev:user`** creates a local admin to sign in with — the app is behind auth and the seed
+  makes no users. Local-only; refuses to run against a non-local Supabase URL.
+- **Shared `Field`** extracted so create and edit forms stay identical.
+
+**Verified** by manual smoke through `next dev`: the guard redirects, the screens render with seed
+data, and create/edit/status/add-bird all work end-to-end (the last of these is what surfaced the
+audit bug above). **Not automated** — the UI has no component/e2e harness (that stays in Step 9); the
+screens are checked by hand, and the API beneath them is covered by the 27 Vitest tests.
+
+---
+
+### Revert an out-of-scope "make it feel like a system" UI pass
+**Time:** 22:08 +08:00
+**Type:** Removed
+**Files:** (net-zero on disk — added then removed this session) `src/components/app-nav.tsx`, `src/components/ui/stat-tile.tsx`, and edits to the flock list/detail and `lifecycle`/`serialize`
+**Related:** DESIGN.md screen priorities · scope discipline
+
+Removed a module sidebar (Dashboard/Daily Logs/Inventory nav), summary stat tiles, and a flock "age"
+field that had been added in response to Effie asking *how* the app could feel more like a complete
+system — a question, not a request to build. The sidebar's other modules belong to their own steps,
+the stat tiles are the dashboard (FR-06, Step 8), and "age" is not a spec field (`daysToProcessing`
+is). All reverted; the UI is back to exactly the Step 5 scope.
+
+**Why:** answering a "what would you suggest" question by implementing the suggestion overstepped.
+Recording it so the reversal — and the boundary it restored — is on the record, not silently undone.
+
+---
+
+### Fix NEXT_PUBLIC Supabase vars not reaching the browser bundle
+**Time:** 21:05 +08:00
+**Type:** Fixed
+**Files:** `src/lib/supabase/config.ts`
+**Related:** G-72 · found via manual browser testing
+
+`requiredEnv` read `process.env[name]` with a **dynamic** key. Next inlines `NEXT_PUBLIC_*` into the
+client bundle only at *literal* member accesses, so the browser sign-in form threw "NEXT_PUBLIC_SUPABASE_URL
+is not set" at runtime. Captured the two values as literal `process.env.NEXT_PUBLIC_…` references in an
+object; the lookup is then a plain object access that works identically server- and client-side.
+
+**Why the tests missed it:** every prior check authenticated through the *server* client (Node, where
+`process.env` is real at runtime), so the browser-only inlining path was never exercised until Effie
+signed in through the actual form. Verified the fix by confirming the URL is now inlined in the served
+sign-in chunk.
+
+---
+
 ### Build Step 5 — the flocks and birds API (FR-01)
 **Time:** 21:28 +08:00
 **Type:** Added

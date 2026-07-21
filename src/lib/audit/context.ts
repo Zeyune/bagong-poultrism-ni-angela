@@ -15,7 +15,21 @@ export type AuditActor = {
   farmId: string;
 };
 
-const storage = new AsyncLocalStorage<AuditActor>();
+// The storage MUST be a process-wide singleton. Under Next's bundler this module
+// can be instantiated more than once — the route's withActor() and the db
+// extension can end up with *different* AsyncLocalStorage instances, so the
+// extension's getActor() reads an empty store and every audit row is written with
+// a null actor. Pinning the instance to globalThis (as db.ts does for the Prisma
+// client) guarantees both sides share one store. Verified: without this, audit
+// attribution is silently lost over HTTP while Vitest — a single module graph —
+// still passes.
+const globalForAudit = globalThis as unknown as {
+  auditStorage?: AsyncLocalStorage<AuditActor>;
+};
+
+const storage =
+  globalForAudit.auditStorage ?? new AsyncLocalStorage<AuditActor>();
+globalForAudit.auditStorage = storage;
 
 export function runWithActor<T>(actor: AuditActor, fn: () => Promise<T>): Promise<T> {
   // Must `await fn()` INSIDE the run callback, not return it unawaited. Prisma's

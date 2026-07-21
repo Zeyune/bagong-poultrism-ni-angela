@@ -1,26 +1,148 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/*
+  Design tokens — DESIGN.md §2 (colour), §4 (type), §5 (spacing/radius/elevation).
+  Every colour here is the DESIGN.md verified-contrast value; do not substitute one
+  by eye (§2.1). Colours are declared in @theme (non-inline) so Tailwind utilities
+  reference them via var(), which lets the dark-theme block below override them.
+*/
+@theme {
+  /* ── Surfaces ── */
+  --color-bg: #ffffff;
+  --color-surface: #f8f9fa;
+  --color-surface-sunken: #f1f3f5;
+  --color-border: #dee2e6;
+  --color-border-strong: #adb5bd;
+
+  /* ── Text ── */
+  --color-text: #212529; /* 16.10:1 on white */
+  --color-text-body: #495057; /* 8.18:1 */
+  --color-text-muted: #6c757d; /* 4.69:1 — placeholder/caption floor */
+
+  /* ── Brand ── */
+  --color-primary: #2e7d32; /* 5.13:1 */
+  --color-primary-hover: #1b5e20; /* 7.87:1 */
+  --color-primary-weak: #e8f5e9;
+  --color-secondary: #1565c0; /* 5.75:1 */
+  --color-secondary-hover: #0d47a1; /* 8.59:1 */
+  --color-secondary-weak: #e3f2fd;
+
+  /* ── Status: text/icon ── */
+  --color-danger: #c62828; /* 5.62:1 */
+  --color-warning: #b45309; /* 5.02:1 */
+  --color-caution: #8d6708; /* 5.15:1 */
+  --color-success: #2e7d32; /* 5.13:1 */
+  --color-info: #1565c0; /* 5.75:1 */
+
+  /* ── Status: surface tints ── */
+  --color-danger-weak: #fdecea;
+  --color-warning-weak: #fef3e2;
+  --color-caution-weak: #fff8e1;
+  --color-success-weak: #e8f5e9;
+  --color-info-weak: #e3f2fd;
+
+  /* ── Focus (never removed, never subtle) ── */
+  --color-focus: #0d47a1; /* 8.59:1 */
+
+  /* ── Type ── */
+  --font-heading: var(--font-montserrat), "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-body: var(--font-lato), "Segoe UI", system-ui, -apple-system, sans-serif;
+
+  /* ── Radius (§5) ── */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --radius-full: 9999px;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/*
+  Dark theme (§2.5) — inverts the lightness relationship; accents are lightened to
+  sit on near-black. A manual toggle sets data-theme="dark"; otherwise the OS
+  preference wins (unless the user has explicitly chosen light). The block is
+  duplicated across the two selectors deliberately — CSS cannot share a declaration
+  body between a bare selector and a media-scoped one.
+*/
+:root[data-theme="dark"] {
+  --color-bg: #121417;
+  --color-surface: #1a1d21;
+  --color-surface-sunken: #0d0f11;
+  --color-border: #2c3034;
+  --color-border-strong: #495057;
+  --color-text: #f8f9fa;
+  --color-text-body: #dee2e6;
+  --color-text-muted: #9aa3ab;
+  --color-primary: #81c784;
+  --color-primary-hover: #a5d6a7;
+  --color-primary-weak: #1b2e1d;
+  --color-secondary: #64b5f6;
+  --color-secondary-hover: #90caf9;
+  --color-secondary-weak: #12243a;
+  --color-danger: #ef9a9a;
+  --color-warning: #ffb74d;
+  --color-caution: #ffd54f;
+  --color-success: #81c784;
+  --color-info: #64b5f6;
+  --color-danger-weak: #2a1615;
+  --color-warning-weak: #2a2012;
+  --color-caution-weak: #2a2612;
+  --color-success-weak: #1b2e1d;
+  --color-info-weak: #12243a;
+  --color-focus: #90caf9;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  :root:not([data-theme="light"]) {
+    --color-bg: #121417;
+    --color-surface: #1a1d21;
+    --color-surface-sunken: #0d0f11;
+    --color-border: #2c3034;
+    --color-border-strong: #495057;
+    --color-text: #f8f9fa;
+    --color-text-body: #dee2e6;
+    --color-text-muted: #9aa3ab;
+    --color-primary: #81c784;
+    --color-primary-hover: #a5d6a7;
+    --color-primary-weak: #1b2e1d;
+    --color-secondary: #64b5f6;
+    --color-secondary-hover: #90caf9;
+    --color-secondary-weak: #12243a;
+    --color-danger: #ef9a9a;
+    --color-warning: #ffb74d;
+    --color-caution: #ffd54f;
+    --color-success: #81c784;
+    --color-info: #64b5f6;
+    --color-danger-weak: #2a1615;
+    --color-warning-weak: #2a2012;
+    --color-caution-weak: #2a2612;
+    --color-success-weak: #1b2e1d;
+    --color-info-weak: #12243a;
+    --color-focus: #90caf9;
   }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text-body);
+  font-family: var(--font-body);
+}
+
+/* Tabular figures wherever numbers line up in columns (§4). */
+table,
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Focus is never removed and never subtle (§7). */
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

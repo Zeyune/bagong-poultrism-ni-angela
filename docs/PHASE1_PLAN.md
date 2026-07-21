@@ -232,8 +232,26 @@ provisions in-transaction, idempotent).
 
 ---
 
-## Step 5 · Flocks and birds (FR-01) 🟡 **API COMPLETE**
+## Step 5 · Flocks and birds (FR-01) ✅ **COMPLETE**
 **~4 days**
+
+> **UI built and manually verified (2026-07-21).** Authenticated shell, flock list (filters + empty
+> and loading states), detail, create form, edit form, the consequence-naming status-change
+> confirmation, and inline bird tagging — hand-rolled on the DESIGN.md token layer (established this
+> step; none existed before). Reads are Server Components, writes go through the Step 5 API. A dev
+> login (`npm run dev:user`) and two seeded BR-03 flocks make the app usable locally.
+>
+> **A serious bug surfaced only here, in the real runtime:** the audit trail was writing every row
+> with a **null actor** over HTTP — the `AsyncLocalStorage` context was duplicated across Next's
+> bundler, so the db extension never saw the actor `withActor()` set. Vitest passed throughout (single
+> module graph); clicking "Add bird" in the browser is what exposed it. Fixed by pinning the storage
+> to `globalThis`. **This means audit attribution can only be verified over HTTP — no Vitest test
+> catches it — which is now a known testing gap.**
+>
+> **Also fixed here:** `NEXT_PUBLIC_*` vars weren't inlined into the client bundle (dynamic env access),
+> which broke browser sign-in. Both browser-only bugs were invisible to the server-side test path.
+>
+> UI has no automated component/e2e coverage yet (Step 9); the screens are checked by hand.
 
 > **API built and tested (2026-07-21).** `POST/GET /flocks`, `GET/PATCH /flocks/:id`,
 > `POST /flocks/:id/status`, and the birds sub-resource (`POST/GET /flocks/:id/birds`). 10 tests

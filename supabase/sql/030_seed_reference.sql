@@ -98,4 +98,23 @@ values
   ('alert_low_inventory00000', 'farm_dev_000000000000000', null, 'LOW_INVENTORY',    0.000, 24, true, now(), now())
 on conflict (id) do nothing;
 
+-- ── Initial flocks (BR-03) ────────────────────────────────────────────────
+-- One LAYER (50) and one BROILER (50). "Initial deployment manages one of each"
+-- is seed data, not a system limit. Seeded here — before 040 attaches the audit
+-- trigger — so these creations are not audited as user actions. currentCount
+-- starts equal to initialCount (BR-13); the broiler carries the 45-day cycle (BR-04).
+insert into public."Flock" (
+  id, "farmId", type, name, breed, "initialCount", "currentCount",
+  "startDate", "cycleLengthDays", status, "defaultFeedItemId",
+  "createdAt", "updatedAt"
+)
+values
+  ('flock_layer_0000000000000', 'farm_dev_000000000000000', 'LAYER', 'Layer Flock 1',
+   'Lohmann Brown', 50, 50, '2026-07-01', null, 'ACTIVE', 'inv_feed_layer0000000000',
+   now(), now()),
+  ('flock_broiler_00000000000', 'farm_dev_000000000000000', 'BROILER', 'Broiler Flock 1',
+   'Ross 308', 50, 50, '2026-07-01', 45, 'ACTIVE', 'inv_feed_broiler00000000',
+   now(), now())
+on conflict (id) do nothing;
+
 commit;

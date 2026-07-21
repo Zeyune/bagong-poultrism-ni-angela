@@ -180,6 +180,25 @@ for (const [label, url] of [["DATABASE_URL", dbUrl], ["DIRECT_URL", directUrl]])
   }
 }
 
+// The two URLs normally carry the SAME password. When one connects and the other
+// fails auth, a mismatch between these two lines is the overwhelmingly likely
+// cause — a paste that landed in only one line, or a typo in one. Comparing them
+// here pinpoints that without printing either value, and distinguishes it from a
+// genuinely wrong password (both would fail) or pooler propagation lag.
+{
+  const pw = (url) => {
+    const ui = /^postgresql:\/\/([^@]*)@/.exec(url)?.[1] ?? "";
+    return ui.slice(ui.indexOf(":") + 1);
+  };
+  const a = pw(dbUrl), b = pw(directUrl);
+  if (a && b && !PLACEHOLDER.test(dbUrl) && !PLACEHOLDER.test(directUrl)) {
+    check("DATABASE_URL and DIRECT_URL use the same password", a === b,
+      a.length === b.length
+        ? "same length but different contents — likely a single-character typo in one line"
+        : `different lengths (${a.length} vs ${b.length}) — one line was not fully updated`);
+  }
+}
+
 // Project ref consistency — a URL from one project with keys from another is
 // otherwise a very confusing runtime failure.
 const refFromUrl = /https:\/\/([a-z0-9]+)\.supabase\.co/.exec(

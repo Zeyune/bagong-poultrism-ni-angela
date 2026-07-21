@@ -19,8 +19,8 @@ import process from "node:process";
 import { config as loadEnv } from "dotenv";
 import pg from "pg";
 
-loadEnv({ path: ".env.local" }); // Next.js convention
-loadEnv(); // fallback
+loadEnv({ path: ".env.local", quiet: true }); // Next.js convention
+loadEnv({ quiet: true }); // fallback
 
 const connectionString = process.env.DIRECT_URL;
 if (!connectionString) {

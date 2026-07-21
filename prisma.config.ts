@@ -13,8 +13,8 @@
 // Next.js reads .env.local; dotenv defaults to .env. Load .env.local first so a
 // single file serves both, then fall back to .env for anything not set there.
 import { config as loadEnv } from "dotenv";
-loadEnv({ path: ".env.local" });
-loadEnv();
+loadEnv({ path: ".env.local", quiet: true });
+loadEnv({ quiet: true });
 
 import { defineConfig } from "prisma/config";
 

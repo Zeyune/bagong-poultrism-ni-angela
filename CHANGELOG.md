@@ -75,6 +75,102 @@ Every entry from here on carries a real `Time:` taken from the clock at the mome
 
 ## 2026-07-21
 
+### Build Step 3 — authentication, session, and the first API routes (FR-10 part 1)
+**Time:** 20:20 +08:00
+**Type:** Added
+**Files:** `src/lib/supabase/{config,server,client}.ts`, `src/proxy.ts`, `src/lib/api/respond.ts`, `src/lib/auth/{errors,resolve-user,require-user,require-admin}.ts`, `src/app/api/v1/users/me/route.ts`, `src/app/api/v1/health/route.ts`, `src/app/sign-in/page.tsx`, `src/app/auth/sign-out/route.ts`, `src/app/page.tsx`, `src/lib/api/respond.test.ts`, `tests/step3-auth.integration.test.ts`, `package.json`, `.github/workflows/ci.yml`, `scripts/check-rls.mjs`, `prisma.config.ts`
+**Related:** FR-10, BR-11 · API.md §2/§3 · PHASE1_PLAN.md Step 3
+
+The auth layer. `@supabase/ssr` server and browser clients; a `proxy` (Next 16's renamed middleware)
+that refreshes the session cookie; the API envelope helper from API.md §3; `requireUser()` →
+`resolveActiveUser()` → `requireAdmin()`; `GET /api/v1/users/me` and a DB-touching
+`GET /api/v1/health`; and a minimal sign-in/out flow with a placeholder authed landing. 12 Vitest
+tests pass; typecheck, lint, all four gates, and `next build` are green.
+
+**JWT verification via getClaims() (decided).** `requireUser()` verifies through
+`supabase.auth.getClaims()`, which validates the ES256 signature against the cached JWKS locally — no
+shared secret, matching the 2026-07-21 API.md §2 decision. Rejected writing our own `jose`
+verification: less of our own code on the signature path is a security property, not a shortcut.
+
+**BR-11 lives in `resolveActiveUser()`, deliberately split out.** Authorization is decided against the
+current database row on every call, never cached in the token, so a user deactivated mid-session is
+rejected on their very next request. Splitting it from the cookie/HTTP layer is what makes it
+directly testable — the FR-10.7 test flips a user to DEACTIVATED and asserts the same token is
+refused on the next call.
+
+**Decided — a valid token with no ACTIVE User row returns 403, not 401.** Missing row (e.g. a
+self-signup the BR-10 trigger declined) and non-ACTIVE status both throw FORBIDDEN; only a
+missing/invalid token is 401. Reasoning: the caller's identity is proven, so 401 ("re-authenticate")
+would mislead — they are authenticated but not authorized. A judgment call not pinned down by the
+spec; flagged here for review.
+
+**Two bugs surfaced and fixed:**
+- **Stale Prisma client.** The first `User.create()` through Prisma failed — the generated client
+  emitted a `cuid` for `User.id` while the column is `@db.Uuid @default(uuid())`. The schema was
+  correct; the client was generated in Step 0 before that line was fixed and never regenerated. Step 1
+  used raw `pg`, so nothing had exercised it. Regenerated, added a `pretest` generate hook, and added
+  the missing `npx prisma generate` step to CI's `database` job (the `static`/`build` jobs had it; the
+  test job did not, harmless only until a test imported the client). No gate catches schema-vs-client
+  drift — `migrate diff` only checks schema-vs-migrations — so the `pretest` hook is the guard.
+- **Next 16 middleware deprecation.** `next build` warned that the `middleware` convention is renamed
+  to `proxy`. Renamed `middleware.ts` → `proxy.ts` and the function to `proxy` rather than build new
+  code on a deprecated convention. Behaviour unchanged.
+
+**BR-10 self-signup confirmed fail-closed, not a bug.** The open thread from last session: a bare
+signup produced no `User` row. `020_auth_trigger.sql` skips provisioning when `raw_user_meta_data` has
+no `farmId` — "a User row with the wrong farm is worse than no row." `resolveActiveUser`'s 403 for a
+missing row is the app-side complement the trigger's own comment anticipates. No change needed.
+
+**Also fixed** the dotenv promo banner leaking into gate and test output (`quiet: true` in both
+`scripts/check-rls.mjs` and `prisma.config.ts` — the latter reached test output via the new `pretest`
+generate hook), the other open thread.
+
+**Verified vs not:**
+- **Automated (12 tests):** `resolveActiveUser` across ACTIVE / DEACTIVATED-mid-session / INVITED /
+  no-row / no-token; the envelope shapes and error-code→status mapping; `/health` issuing a real
+  query. Plus all four CI gates and a clean production build.
+- **NOT yet automated:** the full cookie-session HTTP round trip through `proxy` + `requireUser`, and
+  the browser sign-in form. These need a running dev server / real session and are best covered by a
+  manual smoke test (and the Step 9 pre-launch checks). Do not read the green suite as proof the
+  browser flow works end-to-end — it proves the authorization core does.
+
+**Why:** Step 3 is the security spine every later endpoint sits on. Building the audit trail (Step 4)
+and every feature route depends on `requireUser`/`requireAdmin` existing and enforcing BR-11 first.
+
+---
+
+### Compare the two database-URL passwords to isolate pooler propagation lag
+**Time:** ~20:00 +08:00 *(approximate — exact minute not recorded; see correction note below)*
+**Type:** Added
+**Files:** `scripts/check-env.mjs`
+**Related:** G-72 · I-15
+
+`check:env` now checks that `DATABASE_URL` and `DIRECT_URL` carry the same password, reporting a
+length mismatch or a same-length difference without printing either value. Added while diagnosing a
+post-rotation failure where `DIRECT_URL` (5432) connected but `DATABASE_URL` (pooler, 6543) failed
+authentication.
+
+**Why:** after Effie rotated the cloud database password, that split symptom had two very different
+causes — a paste error in one of the two lines, or Supavisor not yet having synced the new password
+from Postgres. The check ruled out the first (passwords identical), leaving pooler propagation lag,
+which clears on its own. Without the comparison the only next move was to re-read the secret by eye,
+which is exactly what this project's tooling exists to avoid. The distinction matters: a typo needs a
+fix, propagation lag needs only a few minutes.
+
+**Context — credentials rotated.** The cloud database password and service-role key were regenerated
+in the dashboard at the start of this session, because both had reached the transcript via the IDE
+forwarding `.env.cloud`. Low impact (the project has no tables yet), done before the first cloud
+migration where G-65 makes data reachable. `.env.cloud` values are not verifiable from here by
+design; `check:env --connect` is the confirmation.
+
+**Correction (2026-07-21, 20:20 +08:00):** this entry was first written under a `## 2026-07-22`
+heading with a `10:14` time, on the mistaken assumption the session had resumed on a new day. The
+system clock showed 2026-07-21 evening. The date is corrected to 2026-07-21 and the time to an
+approximate evening value — the exact minute was not recorded, and none has been invented. Corrected
+in place, with this note, by Effie's decision rather than left as a phantom future date.
+
+---
+
 ### Stop check:env crashing libuv on exit
 **Time:** 03:21 +08:00
 **Type:** Fixed

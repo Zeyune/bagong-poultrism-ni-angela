@@ -68,6 +68,12 @@ jobs:
           cache: npm
       - run: npm ci
 
+      # The integration tests (npm test, below) use the Prisma client. Unlike the
+      # static and build jobs this one did not generate it, which was harmless only
+      # while no test imported it — Step 3 added tests that do. Without this the
+      # job fails with an uninitialised-client error.
+      - run: npx prisma generate
+
       - uses: supabase/setup-cli@v1
         with:
           version: latest

@@ -151,11 +151,32 @@ provisions in-transaction, idempotent).
 
 ---
 
-## Step 3 · Auth and session (FR-10, part 1)
+## Step 3 · Auth and session (FR-10, part 1) 🟡 **CORE COMPLETE**
 **~4 days**
 
+> **Built and tested (2026-07-21):** the full auth layer — `@supabase/ssr` clients, the session
+> `proxy` (Next 16's renamed middleware), `requireUser()`/`resolveActiveUser()`/`requireAdmin()`, the
+> API.md §3 envelope, `GET /users/me`, DB-touching `GET /health`, and a minimal sign-in/out flow. 12
+> Vitest tests pass; typecheck, lint, all four gates, and `next build` are green.
+>
+> **What surfaced:**
+> - **JWT via `getClaims()`** — verifies ES256 against JWKS, no shared secret (API.md §2). `jose`
+>   rejected: less of our own code on the signature path.
+> - **BR-11 split into `resolveActiveUser()`** so the status check is testable without a cookie
+>   session. FR-10.7 test: same token refused on the request after deactivation.
+> - **Decided:** valid token + no ACTIVE row → **403**, not 401 (authenticated but not authorized).
+> - **Stale Prisma client** emitted a `cuid` for the `@db.Uuid` `User.id` — never exercised before
+>   (Step 1 used raw `pg`). Regenerated; added a `pretest` generate hook and the missing CI generate
+>   step. No gate catches schema-vs-client drift.
+> - **BR-10 self-signup confirmed fail-closed** — no `farmId` metadata → no row, by design.
+>
+> **Still open — NOT yet verified:** the full cookie-session HTTP round trip through `proxy` +
+> `requireUser`, and the browser sign-in form. Automated tests cover the authorization core, not the
+> end-to-end browser flow. Needs a manual smoke test (creating a real invited user and signing in) —
+> this is the "Done when" below and folds into the Step 9 pre-launch checks.
+
 **Build**
-- Supabase Auth sign-in/out; `middleware.ts` refreshing the session.
+- Supabase Auth sign-in/out; `proxy.ts` refreshing the session (was `middleware.ts` — renamed in Next 16).
 - `lib/auth/requireUser()` — verifies the JWT, loads `User` by `authUserId`, **rejects unless
   `status = ACTIVE`, on every request** *(BR-11)*.
 - `lib/auth/requireAdmin()`.

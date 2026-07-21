@@ -18,6 +18,7 @@
     "supabase:start": "supabase start",
     "supabase:stop": "supabase stop",
 
+    "pretest": "prisma generate",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "test:rls": "node scripts/check-rls.mjs",

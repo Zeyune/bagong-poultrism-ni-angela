@@ -75,6 +75,29 @@ Every entry from here on carries a real `Time:` taken from the clock at the mome
 
 ## 2026-07-21
 
+### Build bird edit/remove — closing the last Step 5 contract gap (API.md §6.1)
+**Time:** 23:06 +08:00
+**Type:** Added
+**Files:** `src/app/api/v1/birds/[id]/route.ts`, `src/app/(app)/flocks/[id]/bird-row.tsx`, `src/app/(app)/flocks/[id]/page.tsx`, `src/lib/validation/flock.ts`, `tests/step5-flocks.integration.test.ts`, `docs/PHASE1_PLAN.md`
+**Related:** API.md §6.1, FR-01.5, BR-17, G-45
+
+`GET`/`PATCH`/`DELETE /api/v1/birds/:id` (Auth/Admin/Admin), plus inline edit and a two-step remove on
+each bird row in the flock detail. Birds are scoped to the caller's farm through their flock (a bird
+elsewhere is a 404); tag stays unique per flock on edit (409); delete is a hard delete, safe because a
+bird carries no dependent history (mortality is flock-level — G-45).
+
+**Why:** the birds sub-resource in API.md §6.1 defines edit and remove, and Step 5 had shipped only
+add + list. This was the one genuine contract-level gap identified in the 22:42 audit; closing it
+makes Step 5 complete rather than carrying debt into Step 6. It is deliberately light-touch — bird
+tracking is inert (nothing depends on it), so the UI is an inline tag edit and a confirm-to-remove.
+
+**Verified:** 35 Vitest tests (4 new — edit 200, duplicate-tag 409, delete 204, worker-delete 403);
+all gates and build green; and over HTTP a bird edit returns 200 and a delete returns 204 — the latter
+confirming the audit-actor fix holds on the DELETE path (the trigger fires inside the actor context
+and gets its `farmId`, where before it would have failed with a null constraint).
+
+---
+
 ### Close the flock create/edit field gaps and resolve the tagging-toggle inconsistency
 **Time:** 22:52 +08:00
 **Type:** Added · Fixed · Decided

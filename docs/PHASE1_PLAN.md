@@ -251,7 +251,14 @@ provisions in-transaction, idempotent).
 > **Also fixed here:** `NEXT_PUBLIC_*` vars weren't inlined into the client bundle (dynamic env access),
 > which broke browser sign-in. Both browser-only bugs were invisible to the server-side test path.
 >
-> UI has no automated component/e2e coverage yet (Step 9); the screens are checked by hand.
+> **Completeness follow-up (also 2026-07-21):** the create/edit forms were missing `defaultFeedItemId`
+> and growth-curve fields and a future-start-date guard (USER_FLOWS §3.1) — now added, with the
+> tagging-toggle inconsistency resolved in favour of the model (BR-07). And **bird edit/remove**
+> (`/birds/:id`, API.md §6.1) — the last contract gap — is now built. 35 Vitest tests.
+>
+> UI has no automated component/e2e coverage yet (Step 9); the screens are checked by hand. The one
+> known deferral: BR-24's create-time `warnings[]` is a form hint for now — API.md does not mandate
+> warnings on flock create, and the real warning path lands in Step 6.
 
 > **API built and tested (2026-07-21).** `POST/GET /flocks`, `GET/PATCH /flocks/:id`,
 > `POST /flocks/:id/status`, and the birds sub-resource (`POST/GET /flocks/:id/birds`). 10 tests

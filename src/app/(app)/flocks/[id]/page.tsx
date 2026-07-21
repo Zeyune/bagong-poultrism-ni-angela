@@ -6,6 +6,7 @@ import { serializeFlock, serializeBird } from "@/lib/flocks/serialize";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { StatusActions } from "./status-actions";
 import { AddBird } from "./add-bird";
+import { BirdRow } from "./bird-row";
 
 export const dynamic = "force-dynamic";
 
@@ -110,15 +111,11 @@ export default async function FlockDetailPage({
         ) : (
           <ul className="divide-y divide-border rounded-lg border border-border bg-surface">
             {birds.map((bird) => (
-              <li
+              <BirdRow
                 key={bird.id}
-                className="flex items-center justify-between px-4 py-2 text-sm"
-              >
-                <span className="font-semibold tabular-nums text-text">
-                  {bird.tag}
-                </span>
-                <span className="text-text-muted">{bird.status}</span>
-              </li>
+                bird={{ id: bird.id, tag: bird.tag, status: bird.status }}
+                isAdmin={isAdmin}
+              />
             ))}
           </ul>
         )}

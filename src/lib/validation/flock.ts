@@ -48,3 +48,13 @@ export const createBirdSchema = z.object({
   hatchDate: DATE.optional(),
   notes: z.string().trim().min(1).nullable().optional(),
 });
+
+// PATCH /birds/:id — edit a tagged bird (API.md §6.1). .strict() rejects unknown
+// keys; every field is optional so a partial update is allowed.
+export const patchBirdSchema = z
+  .object({
+    tag: z.string().trim().min(1).optional(),
+    hatchDate: DATE.nullable().optional(),
+    notes: z.string().trim().min(1).nullable().optional(),
+  })
+  .strict();

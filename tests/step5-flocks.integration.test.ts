@@ -6,6 +6,7 @@ import * as flocks from "@/app/api/v1/flocks/route";
 import * as flockId from "@/app/api/v1/flocks/[id]/route";
 import * as status from "@/app/api/v1/flocks/[id]/status/route";
 import * as birds from "@/app/api/v1/flocks/[id]/birds/route";
+import * as birdId from "@/app/api/v1/birds/[id]/route";
 
 // Drive the routes with a mocked session (as in Step 4): only the Supabase server
 // client is mocked, so the real authorization path — requireAdmin → requireUser →
@@ -304,5 +305,61 @@ describe("Flocks — FR-01", () => {
     });
     expect(log).toBeTruthy();
     expect(log!.userId).toBe(admin.id); // withAdminActor carried the actor through the real route
+  });
+});
+
+describe("Birds — edit/remove (API.md §6.1)", () => {
+  let flockId2: string;
+
+  beforeAll(async () => {
+    const { json } = await createFlock({
+      name: `BirdEdit ${randomUUID()}`,
+      type: "LAYER",
+      initialCount: 10,
+      startDate: "2026-07-01",
+    });
+    flockId2 = json.data.id;
+  });
+
+  async function addBird(tag: string): Promise<string> {
+    authState.sub = adminSub;
+    const res = await birds.POST(req("http://x", "POST", { tag }), ctx(flockId2));
+    return (await res.json()).data.id;
+  }
+
+  it("PATCH /birds/:id edits the tag (200)", async () => {
+    const id = await addBird(`E-${randomUUID().slice(0, 8)}`);
+    authState.sub = adminSub;
+    const res = await birdId.PATCH(
+      req("http://x", "PATCH", { tag: "E-RENAMED" }),
+      ctx(id),
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).data.tag).toBe("E-RENAMED");
+  });
+
+  it("PATCH /birds/:id to a duplicate tag in the same flock → 409", async () => {
+    const t1 = `D-${randomUUID().slice(0, 8)}`;
+    await addBird(t1);
+    const id2 = await addBird(`D2-${randomUUID().slice(0, 8)}`);
+    authState.sub = adminSub;
+    const res = await birdId.PATCH(req("http://x", "PATCH", { tag: t1 }), ctx(id2));
+    expect(res.status).toBe(409);
+  });
+
+  it("DELETE /birds/:id removes the bird (204)", async () => {
+    const id = await addBird(`R-${randomUUID().slice(0, 8)}`);
+    authState.sub = adminSub;
+    const res = await birdId.DELETE(req("http://x", "DELETE"), ctx(id));
+    expect(res.status).toBe(204);
+    expect(await db.bird.findUnique({ where: { id } })).toBeNull();
+  });
+
+  it("a FARM_WORKER cannot delete a bird (403)", async () => {
+    const id = await addBird(`W-${randomUUID().slice(0, 8)}`);
+    authState.sub = workerSub;
+    const res = await birdId.DELETE(req("http://x", "DELETE"), ctx(id));
+    expect(res.status).toBe(403);
+    authState.sub = null;
   });
 });
